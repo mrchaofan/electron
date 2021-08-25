@@ -23,7 +23,7 @@ class MediaStreamDevicesController {
       delete;
 
   // Accept or deny the request based on the default policy.
-  bool TakeAction();
+  void TakeAction();
 
   // Explicitly accept or deny the request.
   void Accept();
