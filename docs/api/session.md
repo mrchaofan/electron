@@ -764,8 +764,8 @@ app.whenReady().then(() => {
 
 This handler will be called when web content requests access to media devices
 via the `navigator.mediaDevices` API. Use the
-[desktopCapturer](desktop-capturer.md) API to choose a device or devices to
-grant access to.
+[desktopCapturer](desktop-capturer.md) API to choose which device(s) to grant
+access to.
 
 ```javascript
 const { session, desktopCapturer } = require('electron')
@@ -780,6 +780,8 @@ session.defaultSession.setMediaRequestHandler((request, callback) => {
   }
 })
 ```
+
+Passing `null` instead of a function resets the handler to its default state.
 
 #### `ses.clearHostResolverCache()`
 

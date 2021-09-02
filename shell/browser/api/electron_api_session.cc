@@ -678,6 +678,15 @@ bool Session::ChooseMediaDevice(const content::MediaStreamRequest& request,
 void Session::SetMediaRequestHandler(gin::Arguments* args) {
   MediaRequestHandler handler;
   if (!args->GetNext(&handler))
+}
+
+void Session::SetMediaRequestHandler(v8::Isolate* isolate,
+                                     v8::Local<v8::Value> val) {
+  if (val->IsNull())
+    browser_context_->SetMediaRequestHandler(MediaRequestHandler());
+  MediaRequestHandler handler;
+  if (!gin::ConvertToV8(isolate, val, &handler))
+    return;
   browser_context_->SetMediaRequestHandler(handler);
 }
 
