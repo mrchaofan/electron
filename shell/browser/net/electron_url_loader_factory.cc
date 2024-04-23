@@ -332,9 +332,18 @@ void ElectronURLLoaderFactory::StartLoading(
   // Note that we should not throw JS error in the callback no matter what is
   // passed, to keep compatibility with old code.
   v8::Local<v8::Value> response;
-  if (!args->GetNext(&response)) {
-    OnComplete(std::move(client), request_id,
-               network::URLLoaderCompletionStatus(net::ERR_NOT_IMPLEMENTED));
+  if (!args->GetNext(&response) || response->IsNullOrUndefined() ||
+      (response->IsObject() &&
+       response.As<v8::Object>()
+               ->GetOwnPropertyNames(args->isolate()->GetCurrentContext())
+               .ToLocalChecked()
+               ->Length() == 0)) {
+    mojo::Remote<network::mojom::URLLoaderFactory> target_factory_remote(
+        std::move(target_factory));
+    // Pass-through to the original factory.
+    target_factory_remote->CreateLoaderAndStart(
+        std::move(loader), request_id, options | kBypassCustomProtocolHandlers,
+        request, std::move(client), traffic_annotation);
     return;
   }
 

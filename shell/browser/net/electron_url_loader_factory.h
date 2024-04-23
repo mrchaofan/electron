@@ -25,6 +25,8 @@
 
 namespace electron {
 
+const uint32_t kBypassCustomProtocolHandlers = 1 << 30;
+
 // Old Protocol API can only serve one type of response for one scheme.
 enum class ProtocolType {
   kBuffer,
