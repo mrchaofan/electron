@@ -470,18 +470,19 @@ SimpleURLLoaderWrapper::GetURLLoaderFactoryForURL(const GURL& url) {
   // correctly intercept file:// scheme URLs.
   bool bypass_custom_protocol_handlers =
       request_options_ & kBypassCustomProtocolHandlers;
+  // if (!bypass_custom_protocol_handlers &&
+  //     protocol_registry->IsProtocolIntercepted(url.scheme())) {
+  //   auto& protocol_handler =
+  //       protocol_registry->intercept_handlers().at(url.scheme());
+  //   mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_remote =
+  //       ElectronURLLoaderFactory::Create(protocol_handler.first,
+  //                                        protocol_handler.second);
+  //   url_loader_factory = network::SharedURLLoaderFactory::Create(
+  //       std::make_unique<network::WrapperPendingSharedURLLoaderFactory>(
+  //           std::move(pending_remote)));
+  //   } else if (!bypass_custom_protocol_handlers &&
   if (!bypass_custom_protocol_handlers &&
-      protocol_registry->IsProtocolIntercepted(url.scheme())) {
-    auto& protocol_handler =
-        protocol_registry->intercept_handlers().at(url.scheme());
-    mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_remote =
-        ElectronURLLoaderFactory::Create(protocol_handler.first,
-                                         protocol_handler.second);
-    url_loader_factory = network::SharedURLLoaderFactory::Create(
-        std::make_unique<network::WrapperPendingSharedURLLoaderFactory>(
-            std::move(pending_remote)));
-  } else if (!bypass_custom_protocol_handlers &&
-             protocol_registry->IsProtocolRegistered(url.scheme())) {
+      protocol_registry->IsProtocolRegistered(url.scheme())) {
     auto& protocol_handler = protocol_registry->handlers().at(url.scheme());
     mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_remote =
         ElectronURLLoaderFactory::Create(protocol_handler.first,
