@@ -16,6 +16,7 @@ v8_enable_javascript_promise_hooks = true
 enable_cdm_host_verification = false
 proprietary_codecs = true
 ffmpeg_branding = "Chrome"
+enable_platform_ac3_eac3_audio = true
 
 enable_printing = true
 

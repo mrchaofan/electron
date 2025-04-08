@@ -141,3 +141,4 @@ editcontext_return_physical_pixels_from_firstrectforcharacterrange.patch
 cherry-pick-923797bac925.patch
 cherry-pick-e699ac35ac6c.patch
 ui_add_missing_shortcut_text_for_vkey_command_on_linux.patch
+feat_add_support_for_more_encoding_decoding_formats.patch

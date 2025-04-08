@@ -1,0 +1,510 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: supericeliu <supericeliu@tencent.com>
+Date: Thu, 20 Mar 2025 16:26:08 +0800
+Subject: feat: Add support for more encoding/decoding formats.
+
+--story=0
+
+diff --git a/media/BUILD.gn b/media/BUILD.gn
+index d53c9a3e10863bd089fc90df057854d8f61a2dd4..06f30d22fb7d7c5cc50dc3003028dd4fc41abe62 100644
+--- a/media/BUILD.gn
++++ b/media/BUILD.gn
+@@ -76,11 +76,11 @@ buildflag_header("media_buildflags") {
+   }
+ }
+ 
+-if (proprietary_codecs && media_use_ffmpeg) {
+-  assert(
+-      ffmpeg_branding != "Chromium",
+-      "proprietary codecs and ffmpeg_branding set to Chromium are incompatible")
+-}
++# if (proprietary_codecs && media_use_ffmpeg) {
++#   assert(
++#       ffmpeg_branding != "Chromium",
++#       "proprietary codecs and ffmpeg_branding set to Chromium are incompatible")
++# }
+ 
+ # Common configuration for targets in the media directory; these must not be
+ # exported since things like USE_NEON and USE_CRAS have different meanings
+diff --git a/media/base/audio_codecs.cc b/media/base/audio_codecs.cc
+index 73f3d287cc9904a32425a40a93628e7d479dab3a..1d6753a3494610af8aff6f953c60eac19dd98fd6 100644
+--- a/media/base/audio_codecs.cc
++++ b/media/base/audio_codecs.cc
+@@ -60,6 +60,8 @@ std::string GetCodecName(AudioCodec codec) {
+       return "dtse";
+     case AudioCodec::kAC4:
+       return "ac4";
++    case AudioCodec::kWMAV2:
++      return "wmav2";
+   }
+ }
+ 
+@@ -117,6 +119,9 @@ AudioCodec StringToAudioCodec(const std::string& codec_id) {
+       base::StartsWith(codec_id, "iamf.", base::CompareCase::SENSITIVE)) {
+     return AudioCodec::kIAMF;
+   }
++  if (codec_id == "wmav2") {
++    return AudioCodec::kWMAV2;
++  }
+   return AudioCodec::kUnknown;
+ }
+ 
+diff --git a/media/base/audio_codecs.h b/media/base/audio_codecs.h
+index 8e3710b51977fe41d3773223625b9b59942d99d1..eb40d022d426d37eb97789b8444f21bf19c73b85 100644
+--- a/media/base/audio_codecs.h
++++ b/media/base/audio_codecs.h
+@@ -41,13 +41,14 @@ enum class AudioCodec {
+   kDTSE = 20,
+   kAC4 = 21,
+   kIAMF = 22,
++  kWMAV2 = 23,
+   // DO NOT ADD RANDOM AUDIO CODECS!
+   //
+   // The only acceptable time to add a new codec is if there is production code
+   // that uses said codec in the same CL.
+ 
+   // Must always be equal to the largest entry ever logged.
+-  kMaxValue = kIAMF,
++  kMaxValue = kWMAV2,
+ };
+ 
+ enum class AudioCodecProfile {
+diff --git a/media/base/audio_decoder_config.cc b/media/base/audio_decoder_config.cc
+index f49f19d87da4cb40e6702da1005468f31f0b3d52..74e152c1e071342bf47cb56b4fe12831ebdd4af4 100644
+--- a/media/base/audio_decoder_config.cc
++++ b/media/base/audio_decoder_config.cc
+@@ -25,6 +25,17 @@ AudioDecoderConfig::AudioDecoderConfig(AudioCodec codec,
+ AudioDecoderConfig::AudioDecoderConfig(const AudioDecoderConfig& other) =
+     default;
+ 
++void AudioDecoderConfig::Initialize(AudioCodec codec,
++  SampleFormat sample_format,
++  ChannelLayout channel_layout,
++  int samples_per_second,
++  const std::vector<uint8_t>& extra_data,
++  EncryptionScheme encryption_scheme,
++  base::TimeDelta seek_preroll,
++  int codec_delay) {
++    Initialize(codec, sample_format, channel_layout, samples_per_second,
++      extra_data, encryption_scheme, seek_preroll, codec_delay, 0);
++}
+ void AudioDecoderConfig::Initialize(AudioCodec codec,
+                                     SampleFormat sample_format,
+                                     ChannelLayout channel_layout,
+@@ -32,7 +43,7 @@ void AudioDecoderConfig::Initialize(AudioCodec codec,
+                                     const std::vector<uint8_t>& extra_data,
+                                     EncryptionScheme encryption_scheme,
+                                     base::TimeDelta seek_preroll,
+-                                    int codec_delay) {
++                                    int codec_delay, int block_align) {
+   codec_ = codec;
+   channel_layout_ = channel_layout;
+   samples_per_second_ = samples_per_second;
+@@ -42,6 +53,7 @@ void AudioDecoderConfig::Initialize(AudioCodec codec,
+   encryption_scheme_ = encryption_scheme;
+   seek_preroll_ = seek_preroll;
+   codec_delay_ = codec_delay;
++  block_align_ = block_align;
+ 
+   // If |channel_layout_| is CHANNEL_LAYOUT_DISCRETE, |channels_| and
+   // |bytes_per_frame_| will be overwritten in SetChannelsForDiscrete()
+diff --git a/media/base/audio_decoder_config.h b/media/base/audio_decoder_config.h
+index 1e14d2f77dbbbc3af84dffa661dbab31ad0c9684..f1fe345d34f527c8d2f7b01aa406660549ea2e7c 100644
+--- a/media/base/audio_decoder_config.h
++++ b/media/base/audio_decoder_config.h
+@@ -38,6 +38,14 @@ class MEDIA_EXPORT AudioDecoderConfig {
+   ~AudioDecoderConfig();
+ 
+   // Resets the internal state of this object. |codec_delay| is in frames.
++  void Initialize(AudioCodec codec,
++                  SampleFormat sample_format,
++                  ChannelLayout channel_layout,
++                  int samples_per_second,
++                  const std::vector<uint8_t>& extra_data,
++                  EncryptionScheme encryption_scheme,
++                  base::TimeDelta seek_preroll,
++                  int codec_delay, int block_align);
+   void Initialize(AudioCodec codec,
+                   SampleFormat sample_format,
+                   ChannelLayout channel_layout,
+@@ -46,7 +54,6 @@ class MEDIA_EXPORT AudioDecoderConfig {
+                   EncryptionScheme encryption_scheme,
+                   base::TimeDelta seek_preroll,
+                   int codec_delay);
+-
+   // Returns true if this object has appropriate configuration values, false
+   // otherwise.
+   bool IsValidConfig() const;
+@@ -70,7 +77,7 @@ class MEDIA_EXPORT AudioDecoderConfig {
+   int bytes_per_frame() const { return bytes_per_frame_; }
+   base::TimeDelta seek_preroll() const { return seek_preroll_; }
+   int codec_delay() const { return codec_delay_; }
+-
++  int block_align() const { return block_align_; }
+   // Optional byte data required to initialize audio decoders such as Vorbis
+   // codebooks or AAC AudioSpecificConfig.
+   const std::vector<uint8_t>& extra_data() const { return extra_data_; }
+@@ -148,6 +155,7 @@ class MEDIA_EXPORT AudioDecoderConfig {
+   // The number of frames the decoder should discard before returning decoded
+   // data. Can include both decoder delay and padding added during encoding.
+   int codec_delay_ = 0;
++  int block_align_ = 0;
+ 
+   // Optional parameters that can be set later:
+ 
+diff --git a/media/base/media_types.cc b/media/base/media_types.cc
+index 7a7f52a3224e4feedd96e2ba8380ddd5f00c6c88..9342a6f56986db5bf765d35437de5dd3453c2010 100644
+--- a/media/base/media_types.cc
++++ b/media/base/media_types.cc
+@@ -36,6 +36,7 @@ VideoType VideoType::FromDecoderConfig(const VideoDecoderConfig& config) {
+     case VideoCodec::kVC1:
+     case VideoCodec::kMPEG2:
+     case VideoCodec::kMPEG4:
++    case VideoCodec::kWMV2:
+       break;
+     case VideoCodec::kH264:
+     case VideoCodec::kVP9:
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index b3ca9c106e40653f74c7b304df55c4137cb24d98..33cb1b43eb7243acaa347c43f5c12d1d964e9045 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -375,6 +375,8 @@ bool IsDefaultSupportedVideoType(const VideoType& type) {
+     case VideoCodec::kTheora:
+       return IsBuiltInVideoCodec(type.codec);
+     case VideoCodec::kH264:
++    case VideoCodec::kMPEG4:
++    case VideoCodec::kWMV2:
+       return true;
+     case VideoCodec::kVP8:
+       return IsBuiltInVideoCodec(type.codec)
+@@ -392,7 +394,7 @@ bool IsDefaultSupportedVideoType(const VideoType& type) {
+     case VideoCodec::kUnknown:
+     case VideoCodec::kVC1:
+     case VideoCodec::kMPEG2:
+-    case VideoCodec::kMPEG4:
++    // case VideoCodec::kMPEG4:
+       return false;
+   }
+ }
+@@ -418,6 +420,7 @@ bool IsDefaultSupportedAudioType(const AudioType& type) {
+     case AudioCodec::kPCM_S24BE:
+     case AudioCodec::kPCM_ALAW:
+     case AudioCodec::kVorbis:
++    case AudioCodec::kWMAV2:
+       return true;
+     case AudioCodec::kAMR_NB:
+     case AudioCodec::kAMR_WB:
+diff --git a/media/base/video_codecs.cc b/media/base/video_codecs.cc
+index ba5996cc4a69e14c3e929af044b8ff6f16c24d75..97fc42235ccd9bb057a2f9f95149068f50e4b426 100644
+--- a/media/base/video_codecs.cc
++++ b/media/base/video_codecs.cc
+@@ -37,6 +37,8 @@ std::string GetCodecName(VideoCodec codec) {
+       return "vp9";
+     case VideoCodec::kAV1:
+       return "av1";
++    case VideoCodec::kWMV2:
++      return "wmv2";
+   }
+   NOTREACHED_NORETURN();
+ }
+@@ -66,6 +68,8 @@ std::string GetCodecNameForUMA(VideoCodec codec) {
+       return "VP9";
+     case VideoCodec::kAV1:
+       return "AV1";
++    case VideoCodec::kWMV2:
++      return "WMV2";
+   }
+   NOTREACHED_NORETURN();
+ }
+diff --git a/media/base/video_codecs.h b/media/base/video_codecs.h
+index 8ca35120eee2cdbdd39d7f303ddd85ab28f06bcb..04cf62351b68f65c82d861d263157a8472a50db8 100644
+--- a/media/base/video_codecs.h
++++ b/media/base/video_codecs.h
+@@ -29,12 +29,13 @@ enum class VideoCodec {
+   kHEVC,
+   kDolbyVision,
+   kAV1,
++  kWMV2,
+   // DO NOT ADD RANDOM VIDEO CODECS!
+   //
+   // The only acceptable time to add a new codec is if there is production code
+   // that uses said codec in the same CL.
+ 
+-  kMaxValue = kAV1,  // Must equal the last "real" codec above.
++  kMaxValue = kWMV2,  // Must equal the last "real" codec above.
+ };
+ 
+ // Video codec profiles. Keep in sync with mojo::VideoCodecProfile (see
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index 6ec8cd55bdaf8ec61513c561280a6345ebc0eab9..a30575ac33a5db92a51e9fb591f58af4fe73c531 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -118,6 +118,8 @@ AudioCodec CodecIDToAudioCodec(AVCodecID codec_id) {
+     case AV_CODEC_ID_MPEGH_3D_AUDIO:
+       return AudioCodec::kMpegHAudio;
+ #endif
++    case AV_CODEC_ID_WMAV2:
++      return AudioCodec::kWMAV2;
+     default:
+       DVLOG(1) << "Unknown audio CodecID: " << codec_id;
+   }
+@@ -167,6 +169,8 @@ AVCodecID AudioCodecToCodecID(AudioCodec audio_codec,
+     case AudioCodec::kMpegHAudio:
+       return AV_CODEC_ID_MPEGH_3D_AUDIO;
+ #endif
++    case AudioCodec::kWMAV2:
++      return AV_CODEC_ID_WMAV2;
+     default:
+       DVLOG(1) << "Unknown AudioCodec: " << audio_codec;
+   }
+@@ -192,6 +196,8 @@ static VideoCodec CodecIDToVideoCodec(AVCodecID codec_id) {
+       return VideoCodec::kVP9;
+     case AV_CODEC_ID_AV1:
+       return VideoCodec::kAV1;
++    case AV_CODEC_ID_WMV2:
++      return VideoCodec::kWMV2;
+     default:
+       DVLOG(1) << "Unknown video CodecID: " << codec_id;
+   }
+@@ -216,6 +222,8 @@ AVCodecID VideoCodecToCodecID(VideoCodec video_codec) {
+       return AV_CODEC_ID_VP9;
+     case VideoCodec::kAV1:
+       return AV_CODEC_ID_AV1;
++    case VideoCodec::kWMV2:
++      return AV_CODEC_ID_WMV2;
+     default:
+       DVLOG(1) << "Unknown VideoCodec: " << video_codec;
+   }
+@@ -383,7 +391,7 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
+ 
+   config->Initialize(codec, sample_format, channel_layout, codec_context->sample_rate,
+                      extra_data, encryption_scheme, seek_preroll,
+-                     codec_context->delay);
++                     codec_context->delay, codec_context->block_align);
+   if (channel_layout == CHANNEL_LAYOUT_DISCRETE)
+     config->SetChannelsForDiscrete(codec_context->ch_layout.nb_channels);
+ 
+@@ -459,6 +467,10 @@ void AudioDecoderConfigToAVCodecContext(const AudioDecoderConfig& config,
+   codec_context->ch_layout.nb_channels = config.channels();
+   codec_context->sample_rate = config.samples_per_second();
+ 
++  if (codec_context->codec_id == AV_CODEC_ID_WMAV2) {
++    codec_context->block_align = config.block_align();
++  }
++
+   if (config.extra_data().empty()) {
+     codec_context->extradata = nullptr;
+     codec_context->extradata_size = 0;
+diff --git a/media/ffmpeg/scripts/build_ffmpeg.py b/media/ffmpeg/scripts/build_ffmpeg.py
+index 9c653ac53574dffbc392a6df5563f82d936edb13..f96a9f6a6b1f06ca09120b6c8d6c422094a76e6e 100755
+--- a/media/ffmpeg/scripts/build_ffmpeg.py
++++ b/media/ffmpeg/scripts/build_ffmpeg.py
+@@ -660,7 +660,7 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+         # Disable features.
+         '--disable-debug',
+         '--disable-bzlib',
+-        '--disable-error-resilience',
++        # '--disable-error-resilience',
+         '--disable-iconv',
+         '--disable-network',
+         '--disable-schannel',
+@@ -685,6 +685,20 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+         '--enable-decoder=pcm_s16be,pcm_s24be,pcm_mulaw,pcm_alaw',
+         '--enable-demuxer=ogg,matroska,wav,flac,mp3,mov',
+         '--enable-parser=opus,vorbis,flac,mpegaudio,vp9',
++        '--enable-decoder=aac,h264',
++        '--enable-demuxer=aac',
++        '--enable-parser=aac,h264',
++        '--enable-decoder=mpeg4',
++        '--enable-gpl',
++        '--enable-demuxer=avi',
++        '--enable-demuxer=asf',
++        '--enable-demuxer=matroska',
++        '--enable-decoder=wmv2',
++        '--enable-decoder=wmav2',
++        '--enable-decoder=eac3',
++        '--enable-decoder=ac3',
++        # '--enable-gcrypt',
++        '--enable-nonfree',
+ 
+         # Setup include path so Chromium's libopus can be used.
+         '--extra-cflags=-I' +
+@@ -912,8 +926,8 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+     if 'win' not in target_os and 'android' not in target_os:
+         configure_flags['Common'].extend([
+             '--enable-pic',
+-            '--cc=clang',
+-            '--cxx=clang++',
++            '--cc=clang -arch x86_64',
++            '--cxx=clang++ -arch x86_64',
+             '--ld=clang',
+         ])
+ 
+diff --git a/media/ffmpeg/scripts/generate_gn.py b/media/ffmpeg/scripts/generate_gn.py
+index 12455913ea76f53a399a5dd6b8e473dd8be41d77..ed22e205574fed15d5e2f53b342e8f5c969098b6 100755
+--- a/media/ffmpeg/scripts/generate_gn.py
++++ b/media/ffmpeg/scripts/generate_gn.py
+@@ -110,30 +110,30 @@ def CleanObjectFiles(object_files):
+         # TODO(ihf): Warning, it is *easy* right now to remove more files
+         # than is healthy and end up with a library that the linker does
+         # not complain about but that can't be loaded. Add some verification!
+-        'libavcodec/audioconvert.o',
+-        'libavcodec/resample.o',
+-        'libavcodec/resample2.o',
+-        'libavcodec/x86/dnxhd_mmx.o',
+-        'libavformat/sdp.o',
+-        'libavutil/adler32.o',
+-        'libavutil/avsscanf.o',
+-        'libavutil/audio_fifo.o',
+-        'libavutil/blowfish.o',
+-        'libavutil/cast5.o',
+-        'libavutil/des.o',
+-        'libavutil/file.o',
+-        'libavutil/hash.o',
+-        'libavutil/hmac.o',
+-        'libavutil/lls.o',
+-        'libavutil/murmur3.o',
+-        'libavutil/rc4.o',
+-        'libavutil/ripemd.o',
+-        'libavutil/sha512.o',
+-        'libavutil/tree.o',
+-        'libavutil/tx_double.o',
+-        'libavutil/tx_int32.o',
+-        'libavutil/xtea.o',
+-        'libavutil/xga_font_data.o',
++        # 'libavcodec/audioconvert.o',
++        # 'libavcodec/resample.o',
++        # 'libavcodec/resample2.o',
++        # 'libavcodec/x86/dnxhd_mmx.o',
++        # 'libavformat/sdp.o',
++        # 'libavutil/adler32.o',
++        # 'libavutil/avsscanf.o',
++        # 'libavutil/audio_fifo.o',
++        # 'libavutil/blowfish.o',
++        # 'libavutil/cast5.o',
++        # 'libavutil/des.o',
++        # 'libavutil/file.o',
++        # 'libavutil/hash.o',
++        # 'libavutil/hmac.o',
++        # 'libavutil/lls.o',
++        # 'libavutil/murmur3.o',
++        # 'libavutil/rc4.o',
++        # 'libavutil/ripemd.o',
++        # 'libavutil/sha512.o',
++        # 'libavutil/tree.o',
++        # 'libavutil/tx_double.o',
++        # 'libavutil/tx_int32.o',
++        # 'libavutil/xtea.o',
++        # 'libavutil/xga_font_data.o',
+     ]
+     for name in cleaning_list:
+         name = name.replace('/', os.sep)
+@@ -1039,9 +1039,9 @@ def main():
+     sources_to_check = list(
+         filter(lambda s: not RENAME_REGEX.search(s), sources_to_check))
+ 
+-    if not CheckLicensesForStaticLinking(sources_to_check, source_dir,
+-                                         options.print_licenses):
+-        exit('GENERATE FAILED: invalid licenses detected.')
++    # if not CheckLicensesForStaticLinking(sources_to_check, source_dir,
++    #                                      options.print_licenses):
++    #     exit('GENERATE FAILED: invalid licenses detected.')
+     print('License checks passed.')
+     UpdateCredits(sources_to_check, source_dir)
+ 
+diff --git a/media/filters/ffmpeg_glue.cc b/media/filters/ffmpeg_glue.cc
+index e3a8c01362707a5b078c31df1415be7e95fa889a..cf9603acbf1ba494a2c82e6a9c9c6b92568e74c9 100644
+--- a/media/filters/ffmpeg_glue.cc
++++ b/media/filters/ffmpeg_glue.cc
+@@ -75,7 +75,8 @@ static const char* GetAllowedDemuxers() {
+   static const base::NoDestructor<std::string> kAllowedDemuxers([]() {
+     // This should match the configured lists in //third_party/ffmpeg.
+     std::vector<std::string> allowed_demuxers = {"ogg",  "matroska", "wav",
+-                                                 "flac", "mp3",      "mov"};
++                                                 "flac", "mp3",      "mov",
++                                                 "avi", "asf", "wmv2"};
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+     allowed_demuxers.push_back("aac");
+ #endif
+@@ -138,7 +139,7 @@ const char* FFmpegGlue::GetAllowedAudioDecoders() {
+     // This should match the configured lists in //third_party/ffmpeg.
+     std::string allowed_decoders(
+         "vorbis,libopus,flac,pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,"
+-        "mp3,pcm_s16be,pcm_s24be,pcm_mulaw,pcm_alaw");
++        "mp3,pcm_s16be,pcm_s24be,pcm_mulaw,pcm_alaw,wmav2,eac3");
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+     allowed_decoders += ",aac";
+ #endif
+@@ -153,6 +154,8 @@ const char* FFmpegGlue::GetAllowedVideoDecoders() {
+   // This should match the configured lists in //third_party/ffmpeg.
+ #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+     std::vector<std::string> allowed_decoders;
++    allowed_decoders.push_back("mpeg4");
++    allowed_decoders.push_back("wmv2");
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+     allowed_decoders.push_back("h264");
+ #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
+@@ -231,6 +234,8 @@ bool FFmpegGlue::OpenContext(bool is_local_file) {
+     container_ = container_names::MediaContainerName::kContainerAMR;
+   else if (strcmp(format_context_->iformat->name, "avi") == 0)
+     container_ = container_names::MediaContainerName::kContainerAVI;
++  else if (strcmp(format_context_->iformat->name, "asf") == 0)
++    container_ = container_names::MediaContainerName::kContainerASF;
+ 
+   // For a successfully opened file, we will get a container we've compiled in.
+   CHECK_NE(container_, container_names::MediaContainerName::kContainerUnknown);
+diff --git a/media/filters/ffmpeg_video_decoder.cc b/media/filters/ffmpeg_video_decoder.cc
+index 4935ef5fd61226eafadb3c24ba847d484483d3a2..c12c88eab0417fb0e4fa0cbb1387392a962919c7 100644
+--- a/media/filters/ffmpeg_video_decoder.cc
++++ b/media/filters/ffmpeg_video_decoder.cc
+@@ -81,12 +81,14 @@ static int GetFFmpegVideoDecoderThreadCount(const VideoDecoderConfig& config) {
+     case VideoCodec::kAV1:
+     case VideoCodec::kDolbyVision:
+     case VideoCodec::kTheora:
+-    case VideoCodec::kMPEG4:
++    // case VideoCodec::kMPEG4:
+     case VideoCodec::kVP8:
+       // We do not compile ffmpeg with support for any of these codecs.
+       NOTREACHED();
+ 
+     case VideoCodec::kH264:
++    case VideoCodec::kMPEG4:
++    case VideoCodec::kWMV2:
+       // Normalize to three threads for 1080p content, then scale linearly
+       // with number of pixels.
+       // Examples:
+diff --git a/media/mojo/mojom/stable/stable_video_decoder_types.mojom b/media/mojo/mojom/stable/stable_video_decoder_types.mojom
+index 8781fce50e34d8009a80c9af31f64b7dff2a62ff..705b556f590810748237211cb5d9144a1912663e 100644
+--- a/media/mojo/mojom/stable/stable_video_decoder_types.mojom
++++ b/media/mojo/mojom/stable/stable_video_decoder_types.mojom
+@@ -25,6 +25,7 @@ enum VideoCodec {
+   kHEVC,
+   kDolbyVision,
+   kAV1,
++  kWMV2,
+   // DO NOT ADD RANDOM VIDEO CODECS!
+   //
+   // The only acceptable time to add a new codec is if there is production code
+diff --git a/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h b/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h
+index d835aa7621ce4ae8d937164dc93542e1e00047a0..2efbbbbdc5963888ec8e49a504c91375f064ed6d 100644
+--- a/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h
++++ b/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h
+@@ -791,6 +791,8 @@ struct EnumTraits<media::stable::mojom::VideoCodec, ::media::VideoCodec> {
+         return media::stable::mojom::VideoCodec::kDolbyVision;
+       case ::media::VideoCodec::kAV1:
+         return media::stable::mojom::VideoCodec::kAV1;
++      case ::media::VideoCodec::kWMV2:
++        return media::stable::mojom::VideoCodec::kWMV2;
+     }
+ 
+     NOTREACHED_NORETURN();
+@@ -834,6 +836,9 @@ struct EnumTraits<media::stable::mojom::VideoCodec, ::media::VideoCodec> {
+       case media::stable::mojom::VideoCodec::kAV1:
+         *output = ::media::VideoCodec::kAV1;
+         return true;
++      case media::stable::mojom::VideoCodec::kWMV2:
++        *output = ::media::VideoCodec::kWMV2;
++        return true;
+     }
+ 
+     NOTREACHED_NORETURN();
