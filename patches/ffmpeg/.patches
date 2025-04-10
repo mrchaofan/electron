@@ -1,2 +1,3 @@
 link_with_loader_path.patch
 feat_add_support_for_more_encoding_decoding_formats.patch
+feat_disable_codecs_that_need_gpl_license.patch

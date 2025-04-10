@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: supericeliu <supericeliu@tencent.com>
+Date: Thu, 10 Apr 2025 10:58:20 +0800
+Subject: feat: disable codecs that need gpl license.
+
+--story=0
+
+diff --git a/media/ffmpeg/scripts/build_ffmpeg.py b/media/ffmpeg/scripts/build_ffmpeg.py
+index f96a9f6a6b1f06ca09120b6c8d6c422094a76e6e..256e023d5261a2884e450a1f6954ffedefe4b7f7 100755
+--- a/media/ffmpeg/scripts/build_ffmpeg.py
++++ b/media/ffmpeg/scripts/build_ffmpeg.py
+@@ -689,16 +689,15 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+         '--enable-demuxer=aac',
+         '--enable-parser=aac,h264',
+         '--enable-decoder=mpeg4',
+-        '--enable-gpl',
++        # '--enable-gpl',
+         '--enable-demuxer=avi',
+         '--enable-demuxer=asf',
+         '--enable-demuxer=matroska',
+         '--enable-decoder=wmv2',
+         '--enable-decoder=wmav2',
+-        '--enable-decoder=eac3',
+-        '--enable-decoder=ac3',
+-        # '--enable-gcrypt',
+-        '--enable-nonfree',
++        # '--enable-decoder=eac3',
++        # '--enable-decoder=ac3',
++        # '--enable-nonfree',
+ 
+         # Setup include path so Chromium's libopus can be used.
+         '--extra-cflags=-I' +
+@@ -926,8 +925,8 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+     if 'win' not in target_os and 'android' not in target_os:
+         configure_flags['Common'].extend([
+             '--enable-pic',
+-            '--cc=clang -arch x86_64',
+-            '--cxx=clang++ -arch x86_64',
++            '--cc=clang',
++            '--cxx=clang++',
+             '--ld=clang',
+         ])
+ 
+diff --git a/media/ffmpeg/scripts/generate_gn.py b/media/ffmpeg/scripts/generate_gn.py
+index ed22e205574fed15d5e2f53b342e8f5c969098b6..d9810bfe5ffbe049bcdbc44bade06e327e22e0f2 100755
+--- a/media/ffmpeg/scripts/generate_gn.py
++++ b/media/ffmpeg/scripts/generate_gn.py
+@@ -1039,9 +1039,9 @@ def main():
+     sources_to_check = list(
+         filter(lambda s: not RENAME_REGEX.search(s), sources_to_check))
+ 
+-    # if not CheckLicensesForStaticLinking(sources_to_check, source_dir,
+-    #                                      options.print_licenses):
+-    #     exit('GENERATE FAILED: invalid licenses detected.')
++    if not CheckLicensesForStaticLinking(sources_to_check, source_dir,
++                                         options.print_licenses):
++        exit('GENERATE FAILED: invalid licenses detected.')
+     print('License checks passed.')
+     UpdateCredits(sources_to_check, source_dir)
+ 
