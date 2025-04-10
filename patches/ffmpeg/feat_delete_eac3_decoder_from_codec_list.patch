@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: supericeliu <supericeliu@tencent.com>
+Date: Thu, 10 Apr 2025 16:52:17 +0800
+Subject: feat: delete eac3_decoder from codec_list
+
+--story=0
+
+diff --git a/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c b/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
+index abd1680ecf92190598fa084dd8a70aa5dad85a9b..e32299d268739202b164cc297b25a140bc9de874 100644
+--- a/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
++++ b/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
+@@ -2,7 +2,7 @@ static const FFCodec * const codec_list[] = {
+     &ff_mpeg4_decoder,
+     &ff_wmv2_decoder,
+     &ff_wmav2_decoder,
+-    &ff_eac3_decoder,
++    // &ff_eac3_decoder,
+     
+     &ff_h264_decoder,
+     &ff_aac_decoder,
+diff --git a/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c b/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c
+index abd1680ecf92190598fa084dd8a70aa5dad85a9b..e32299d268739202b164cc297b25a140bc9de874 100644
+--- a/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c
++++ b/chromium/config/Chrome/mac/x64/libavcodec/codec_list.c
+@@ -2,7 +2,7 @@ static const FFCodec * const codec_list[] = {
+     &ff_mpeg4_decoder,
+     &ff_wmv2_decoder,
+     &ff_wmav2_decoder,
+-    &ff_eac3_decoder,
++    // &ff_eac3_decoder,
+     
+     &ff_h264_decoder,
+     &ff_aac_decoder,
