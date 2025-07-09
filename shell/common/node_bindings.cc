@@ -57,6 +57,8 @@
   V(electron_browser_event_emitter)      \
   V(electron_browser_global_shortcut)    \
   V(electron_browser_image_view)         \
+  V(electron_browser_hello_world_view)   \
+  V(electron_browser_super_view)         \
   V(electron_browser_in_app_purchase)    \
   V(electron_browser_menu)               \
   V(electron_browser_message_port)       \
