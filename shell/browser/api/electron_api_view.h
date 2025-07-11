@@ -15,11 +15,30 @@
 #include "ui/views/view_observer.h"
 #include "v8/include/v8-value.h"
 
+namespace electron::super {
+class SuperCrViewDelegates {
+ public:
+  friend class SuperCrView;
+
+ protected:
+  // 鼠标事件相关
+  virtual void OnCrMouseEntered(const ui::MouseEvent& event) = 0;
+  virtual void OnCrMouseExited(const ui::MouseEvent& event) = 0;
+  virtual void OnCrMouseMoved(const ui::MouseEvent& event) = 0;
+  virtual bool OnCrMousePressed(const ui::MouseEvent& event) = 0;
+  virtual void OnCrMouseReleased(const ui::MouseEvent& event) = 0;
+  virtual bool OnCrMouseDragged(const ui::MouseEvent& event) = 0;
+  virtual void OnCrMouseCaptureLost() = 0;
+};
+
+}  // namespace electron::super
+
 namespace electron::api {
 
 using ChildPair = std::pair<raw_ptr<views::View>, v8::Global<v8::Object>>;
 
 class View : public gin_helper::EventEmitter<View>,
+             public super::SuperCrViewDelegates,
              private views::ViewObserver {
  public:
   static gin_helper::WrappableBase* New(gin::Arguments* args);
@@ -53,6 +72,9 @@ class View : public gin_helper::EventEmitter<View>,
   View(const View&) = delete;
   View& operator=(const View&) = delete;
 
+  gfx::Size GetPreferredSize() const;
+  void SizeToPreferredSize();
+
  protected:
   explicit View(views::View* view);
   View();
@@ -60,6 +82,14 @@ class View : public gin_helper::EventEmitter<View>,
 
   // Should delete the |view_| in destructor.
   void set_delete_view(bool should) { delete_view_ = should; }
+
+  void OnCrMouseEntered(const ui::MouseEvent& event) override;
+  void OnCrMouseExited(const ui::MouseEvent& event) override;
+  void OnCrMouseMoved(const ui::MouseEvent& event) override;
+  bool OnCrMousePressed(const ui::MouseEvent& event) override;
+  void OnCrMouseReleased(const ui::MouseEvent& event) override;
+  bool OnCrMouseDragged(const ui::MouseEvent& event) override;
+  void OnCrMouseCaptureLost() override;
 
  private:
   void ReorderChildView(gin::Handle<View> child, size_t index);

@@ -26,6 +26,37 @@
 #include "shell/browser/animation_util.h"
 #endif
 
+namespace electron::super {
+class SuperCrView : public views::View {
+ public:
+  explicit SuperCrView(SuperCrViewDelegates* delegates)
+      : delegates_(delegates) {}
+
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    delegates_->OnCrMouseEntered(event);
+  }
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    delegates_->OnCrMouseExited(event);
+  }
+  void OnMouseMoved(const ui::MouseEvent& event) override {
+    delegates_->OnCrMouseMoved(event);
+  }
+  bool OnMousePressed(const ui::MouseEvent& event) override {
+    return delegates_->OnCrMousePressed(event);
+  }
+  void OnMouseReleased(const ui::MouseEvent& event) override {
+    delegates_->OnCrMouseReleased(event);
+  }
+  bool OnMouseDragged(const ui::MouseEvent& event) override {
+    return delegates_->OnCrMouseDragged(event);
+  }
+  void OnMouseCaptureLost() override { delegates_->OnCrMouseCaptureLost(); }
+
+ private:
+  SuperCrViewDelegates* delegates_;
+};
+}  // namespace electron::super
+
 namespace gin {
 
 template <>
@@ -171,7 +202,7 @@ View::View(views::View* view) : view_(view) {
   view_->AddObserver(this);
 }
 
-View::View() : View(new views::View()) {}
+View::View() : View(new super::SuperCrView(this)) {}
 
 View::~View() {
   if (!view_)
@@ -408,7 +439,170 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("getBounds", &View::GetBounds)
       .SetMethod("setBackgroundColor", &View::SetBackgroundColor)
       .SetMethod("setLayout", &View::SetLayout)
-      .SetMethod("setVisible", &View::SetVisible);
+      .SetMethod("setVisible", &View::SetVisible)
+      .SetMethod("getPreferredSize", &View::GetPreferredSize)
+      .SetMethod("sizeToPreferredSize", &View::SizeToPreferredSize);
+}
+
+void View::OnCrMouseEntered(const ui::MouseEvent& event) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "onMouseEntered")
+                    .ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  {
+    v8::TryCatch try_catch(isolate());
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+            .IsEmpty()) {
+      try_catch.Exception();
+    }
+  }
+}
+void View::OnCrMouseExited(const ui::MouseEvent& event) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "onMouseExited")
+                    .ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  {
+    v8::TryCatch try_catch(isolate());
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+            .IsEmpty()) {
+      try_catch.Exception();
+    }
+  }
+}
+void View::OnCrMouseMoved(const ui::MouseEvent& event) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "onMouseMoved")
+                    .ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  {
+    v8::TryCatch try_catch(isolate());
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+            .IsEmpty()) {
+      try_catch.Exception();
+    }
+  }
+}
+bool View::OnCrMousePressed(const ui::MouseEvent& event) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return false;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "onMousePressed")
+                    .ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  bool result = false;
+  v8::MaybeLocal<v8::Value> ret;
+  {
+    v8::TryCatch try_catch(isolate());
+    ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {});
+    if (ret.IsEmpty()) {
+      try_catch.Exception();
+    }
+  }
+  if (ret.ToLocalChecked()->IsTrue()) {
+    result = true;
+  }
+  return result;
+}
+void View::OnCrMouseReleased(const ui::MouseEvent& event) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "onMouseReleased")
+                    .ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  {
+    v8::TryCatch try_catch(isolate());
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+            .IsEmpty()) {
+      try_catch.Exception();
+    }
+  }
+}
+bool View::OnCrMouseDragged(const ui::MouseEvent& event) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return false;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "onMouseDragged")
+                    .ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  bool result = false;
+  v8::MaybeLocal<v8::Value> ret;
+  {
+    v8::TryCatch try_catch(isolate());
+    ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {});
+    if (ret.IsEmpty()) {
+      try_catch.Exception();
+    }
+  }
+  if (ret.ToLocalChecked()->IsTrue()) {
+    result = true;
+  }
+  return result;
+}
+void View::OnCrMouseCaptureLost() {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "onMouseCaptureLost")
+                    .ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  {
+    v8::TryCatch try_catch(isolate());
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+            .IsEmpty()) {
+      try_catch.Exception();
+    }
+  }
+}
+
+gfx::Size View::GetPreferredSize() const {
+  return view()->GetPreferredSize();
+}
+
+void View::SizeToPreferredSize() {
+  view()->SizeToPreferredSize();
 }
 
 }  // namespace electron::api
