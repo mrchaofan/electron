@@ -65,6 +65,7 @@ class View : public gin_helper::EventEmitter<View>,
   void OnViewIsDeleting(views::View* observed_view) override;
   void OnChildViewRemoved(views::View* observed_view,
                           views::View* child) override;
+  bool HitTestPoint(const gfx::Point& point) const;
 
   views::View* view() const { return view_; }
 
@@ -74,6 +75,8 @@ class View : public gin_helper::EventEmitter<View>,
 
   gfx::Size GetPreferredSize() const;
   void SizeToPreferredSize();
+
+  void SetPreferredSize(gfx::Size size);
 
  protected:
   explicit View(views::View* view);

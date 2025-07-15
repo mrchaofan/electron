@@ -39,6 +39,9 @@ class SuperMouseEvent : public gin_helper::Wrappable<SuperMouseEvent> {
   void SetHandled();
   bool handled() const;
 
+  void set_location(const gfx::Point& location);
+  void set_root_location(const gfx::Point& root_location);
+
  protected:
   explicit SuperMouseEvent(ui::MouseEvent* mouse_event);
   ~SuperMouseEvent() override;

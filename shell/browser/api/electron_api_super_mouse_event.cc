@@ -63,7 +63,9 @@ void SuperMouseEvent::BuildPrototype(
       .SetMethod("stopPropagation", &SuperMouseEvent::StopPropagation)
       .SetMethod("stoppedPropagation", &SuperMouseEvent::stopped_propagation)
       .SetMethod("setHandled", &SuperMouseEvent::SetHandled)
-      .SetMethod("handled", &SuperMouseEvent::handled);
+      .SetMethod("handled", &SuperMouseEvent::handled)
+      .SetMethod("setLocation", &SuperMouseEvent::set_location)
+      .SetMethod("setRootLocation", &SuperMouseEvent::set_root_location);
 }
 
 SuperMouseEvent::SuperMouseEvent(ui::MouseEvent* mouse_event)
@@ -126,6 +128,13 @@ bool SuperMouseEvent::handled() const {
 
 ui::MouseEvent* SuperMouseEvent::mouse_event() const {
   return mouse_event_;
+}
+
+void SuperMouseEvent::set_location(const gfx::Point& location) {
+  mouse_event()->set_location(location);
+}
+void SuperMouseEvent::set_root_location(const gfx::Point& root_location) {
+  mouse_event()->set_root_location(root_location);
 }
 
 }  // namespace electron::super

@@ -445,7 +445,9 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setLayout", &View::SetLayout)
       .SetMethod("setVisible", &View::SetVisible)
       .SetMethod("getPreferredSize", &View::GetPreferredSize)
-      .SetMethod("sizeToPreferredSize", &View::SizeToPreferredSize);
+      .SetMethod("sizeToPreferredSize", &View::SizeToPreferredSize)
+      .SetMethod("hitTestPoint", &View::HitTestPoint)
+      .SetMethod("setPreferredSize", &View::SetPreferredSize);
 }
 
 void View::OnCrMouseEntered(const ui::MouseEvent& event) {
@@ -627,6 +629,13 @@ void View::SizeToPreferredSize() {
   view()->SizeToPreferredSize();
 }
 
+bool View::HitTestPoint(const gfx::Point& point) const {
+  return view()->HitTestPoint(point);
+}
+
+void View::SetPreferredSize(gfx::Size size) {
+  view()->SetPreferredSize(size);
+}
 }  // namespace electron::api
 
 namespace {
