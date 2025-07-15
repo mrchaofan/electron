@@ -11,7 +11,9 @@
 #include <utility>
 
 #include "gin/data_object_builder.h"
+#include "gin/handle.h"
 #include "gin/wrappable.h"
+#include "shell/browser/api/electron_api_super_mouse_event.h"
 #include "shell/browser/javascript_environment.h"
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/gfx_converter.h"
@@ -21,6 +23,8 @@
 #include "ui/views/background.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_manager_base.h"
+#include "v8-local-handle.h"
+#include "v8-value.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "shell/browser/animation_util.h"
@@ -456,9 +460,12 @@ void View::OnCrMouseEntered(const ui::MouseEvent& event) {
                     .ToLocalChecked())
           .ToLocalChecked()
           .As<v8::Function>();
+  gin::Handle<super::SuperMouseEvent> sme =
+      super::SuperMouseEvent::Create(isolate(), event);
+  v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
     v8::TryCatch try_catch(isolate());
-    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
       try_catch.Exception();
     }
@@ -476,9 +483,12 @@ void View::OnCrMouseExited(const ui::MouseEvent& event) {
                     .ToLocalChecked())
           .ToLocalChecked()
           .As<v8::Function>();
+  gin::Handle<super::SuperMouseEvent> sme =
+      super::SuperMouseEvent::Create(isolate(), event);
+  v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
     v8::TryCatch try_catch(isolate());
-    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
       try_catch.Exception();
     }
@@ -496,9 +506,12 @@ void View::OnCrMouseMoved(const ui::MouseEvent& event) {
                     .ToLocalChecked())
           .ToLocalChecked()
           .As<v8::Function>();
+  gin::Handle<super::SuperMouseEvent> sme =
+      super::SuperMouseEvent::Create(isolate(), event);
+  v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
     v8::TryCatch try_catch(isolate());
-    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
       try_catch.Exception();
     }
@@ -518,9 +531,12 @@ bool View::OnCrMousePressed(const ui::MouseEvent& event) {
           .As<v8::Function>();
   bool result = false;
   v8::MaybeLocal<v8::Value> ret;
+  gin::Handle<super::SuperMouseEvent> sme =
+      super::SuperMouseEvent::Create(isolate(), event);
+  v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
     v8::TryCatch try_catch(isolate());
-    ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {});
+    ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args);
     if (ret.IsEmpty()) {
       try_catch.Exception();
     }
@@ -542,9 +558,12 @@ void View::OnCrMouseReleased(const ui::MouseEvent& event) {
                     .ToLocalChecked())
           .ToLocalChecked()
           .As<v8::Function>();
+  gin::Handle<super::SuperMouseEvent> sme =
+      super::SuperMouseEvent::Create(isolate(), event);
+  v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
     v8::TryCatch try_catch(isolate());
-    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
+    if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
       try_catch.Exception();
     }
@@ -564,9 +583,12 @@ bool View::OnCrMouseDragged(const ui::MouseEvent& event) {
           .As<v8::Function>();
   bool result = false;
   v8::MaybeLocal<v8::Value> ret;
+  gin::Handle<super::SuperMouseEvent> sme =
+      super::SuperMouseEvent::Create(isolate(), event);
+  v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
     v8::TryCatch try_catch(isolate());
-    ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {});
+    ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args);
     if (ret.IsEmpty()) {
       try_catch.Exception();
     }

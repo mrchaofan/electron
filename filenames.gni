@@ -308,6 +308,8 @@ filenames = {
     "shell/browser/api/electron_api_session.h",
     "shell/browser/api/electron_api_super_box_view.cc",
     "shell/browser/api/electron_api_super_box_view.h",
+    "shell/browser/api/electron_api_super_mouse_event.cc",
+    "shell/browser/api/electron_api_super_mouse_event.h",
     "shell/browser/api/electron_api_system_preferences.cc",
     "shell/browser/api/electron_api_system_preferences.h",
     "shell/browser/api/electron_api_tray.cc",
