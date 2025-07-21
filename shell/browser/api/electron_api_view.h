@@ -74,6 +74,7 @@ class View : public gin_helper::EventEmitter<View>,
   View& operator=(const View&) = delete;
 
   gfx::Size GetPreferredSize() const;
+  gfx::Insets GetInsets() const;
   void SizeToPreferredSize();
 
   void SetPreferredSize(gfx::Size size);

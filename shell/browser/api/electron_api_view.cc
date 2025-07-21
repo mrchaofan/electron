@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "gin/converter.h"
 #include "gin/data_object_builder.h"
 #include "gin/handle.h"
 #include "gin/wrappable.h"
@@ -20,6 +21,8 @@
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_manager_base.h"
@@ -447,7 +450,8 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("getPreferredSize", &View::GetPreferredSize)
       .SetMethod("sizeToPreferredSize", &View::SizeToPreferredSize)
       .SetMethod("hitTestPoint", &View::HitTestPoint)
-      .SetMethod("setPreferredSize", &View::SetPreferredSize);
+      .SetMethod("setPreferredSize", &View::SetPreferredSize)
+      .SetMethod("getInsets", &View::GetInsets);
 }
 
 void View::OnCrMouseEntered(const ui::MouseEvent& event) {
@@ -635,6 +639,10 @@ bool View::HitTestPoint(const gfx::Point& point) const {
 
 void View::SetPreferredSize(gfx::Size size) {
   view()->SetPreferredSize(size);
+}
+
+gfx::Insets View::GetInsets() const {
+  return view()->View::GetInsets();
 }
 }  // namespace electron::api
 
