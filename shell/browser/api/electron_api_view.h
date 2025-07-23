@@ -73,11 +73,13 @@ class View : public gin_helper::EventEmitter<View>,
   View(const View&) = delete;
   View& operator=(const View&) = delete;
 
-  gfx::Size GetPreferredSize() const;
+  gfx::Size GetPreferredSize(const views::SizeBounds& available_size) const;
   gfx::Insets GetInsets() const;
   void SizeToPreferredSize();
 
   void SetPreferredSize(gfx::Size size);
+
+  void LayoutImmediately();
 
  protected:
   explicit View(views::View* view);

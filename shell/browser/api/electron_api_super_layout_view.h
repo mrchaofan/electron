@@ -17,9 +17,10 @@ class SuperCrLayoutViewDelegates {
 
  protected:
   virtual gfx::Size CalculateCrPreferredSize(
-      const views::SizeBounds& available_size) const;
-  virtual gfx::Size GetCrMinimumSize() const;
-  virtual gfx::Size GetCrMaximumSize() const;
+      const views::SizeBounds& available_size) const = 0;
+  virtual gfx::Size GetCrMinimumSize() const = 0;
+  virtual gfx::Size GetCrMaximumSize() const = 0;
+  virtual void CrLayout() = 0;
 };
 }  // namespace electron::super
 
@@ -40,6 +41,7 @@ class SuperLayoutView : public View, public super::SuperCrLayoutViewDelegates {
       const views::SizeBounds& available_size) const override;
   gfx::Size GetCrMinimumSize() const override;
   gfx::Size GetCrMaximumSize() const override;
+  void CrLayout() override;
 };
 
 }  // namespace electron::api

@@ -26,6 +26,8 @@ class SuperCrLayoutView : public views::View {
     return delegates_->GetCrMaximumSize();
   }
 
+  void Layout(PassKey) override { delegates_->CrLayout(); }
+
  private:
   SuperCrLayoutViewDelegates* delegates_;
 };
@@ -126,6 +128,21 @@ gfx::Size SuperLayoutView::GetCrMaximumSize() const {
     }
   }
   return gfx::Size();
+}
+
+void SuperLayoutView::CrLayout() {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return;
+  v8::Local<v8::Function> handler =
+      wrapper
+          ->Get(isolate()->GetCurrentContext(),
+                v8::String::NewFromUtf8(isolate(), "layout").ToLocalChecked())
+          .ToLocalChecked()
+          .As<v8::Function>();
+  v8::TryCatch try_catch(isolate());
+  handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {}).IsEmpty();
 }
 }  // namespace electron::api
 

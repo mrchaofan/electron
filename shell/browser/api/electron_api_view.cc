@@ -5,6 +5,7 @@
 #include "shell/browser/api/electron_api_view.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <string>
@@ -26,6 +27,7 @@
 #include "ui/views/background.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_manager_base.h"
+#include "ui/views/layout/layout_types.h"
 #include "v8-local-handle.h"
 #include "v8-value.h"
 
@@ -168,6 +170,18 @@ struct Converter<views::SizeBound> {
       return v8::Integer::New(isolate, in.value());
     return v8::Number::New(isolate, std::numeric_limits<double>::infinity());
   }
+  static bool FromV8(v8::Isolate* isolate,
+                     v8::Local<v8::Value> val,
+                     views::SizeBound* out) {
+    double size_bound = std::numeric_limits<double>::infinity();
+    if (gin::ConvertFromV8(isolate, val, &size_bound)) {
+      *out = std::isinf(size_bound)
+                 ? views::SizeBound()
+                 : views::SizeBound(static_cast<int>(size_bound));
+      return true;
+    }
+    return false;
+  }
 };
 
 template <>
@@ -178,6 +192,18 @@ struct Converter<views::SizeBounds> {
         .Set("width", in.width())
         .Set("height", in.height())
         .Build();
+  }
+  static bool FromV8(v8::Isolate* isolate,
+                     v8::Local<v8::Value> val,
+                     views::SizeBounds* out) {
+    gin::Dictionary dict(isolate);
+    if (!gin::ConvertFromV8(isolate, val, &dict))
+      return false;
+    views::SizeBound width, height;
+    if (!dict.Get("width", &width) || !dict.Get("height", &height))
+      return false;
+    *out = views::SizeBounds(width, height);
+    return true;
   }
 };
 }  // namespace gin
@@ -451,7 +477,8 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("sizeToPreferredSize", &View::SizeToPreferredSize)
       .SetMethod("hitTestPoint", &View::HitTestPoint)
       .SetMethod("setPreferredSize", &View::SetPreferredSize)
-      .SetMethod("getInsets", &View::GetInsets);
+      .SetMethod("getInsets", &View::GetInsets)
+      .SetMethod("layoutImmediately", &View::LayoutImmediately);
 }
 
 void View::OnCrMouseEntered(const ui::MouseEvent& event) {
@@ -625,8 +652,9 @@ void View::OnCrMouseCaptureLost() {
   }
 }
 
-gfx::Size View::GetPreferredSize() const {
-  return view()->GetPreferredSize();
+gfx::Size View::GetPreferredSize(
+    const views::SizeBounds& available_size) const {
+  return view()->GetPreferredSize(available_size);
 }
 
 void View::SizeToPreferredSize() {
@@ -643,6 +671,10 @@ void View::SetPreferredSize(gfx::Size size) {
 
 gfx::Insets View::GetInsets() const {
   return view()->View::GetInsets();
+}
+
+void View::LayoutImmediately() {
+  view()->DeprecatedLayoutImmediately();
 }
 }  // namespace electron::api
 
