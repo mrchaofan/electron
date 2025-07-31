@@ -81,6 +81,9 @@ class View : public gin_helper::EventEmitter<View>,
 
   void LayoutImmediately();
 
+  void SetNotifyEnterExitOnChild(bool notify);
+  bool GetNotifyEnterExitOnChild() const;
+
  protected:
   explicit View(views::View* view);
   View();

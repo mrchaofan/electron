@@ -478,7 +478,9 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("hitTestPoint", &View::HitTestPoint)
       .SetMethod("setPreferredSize", &View::SetPreferredSize)
       .SetMethod("getInsets", &View::GetInsets)
-      .SetMethod("layoutImmediately", &View::LayoutImmediately);
+      .SetMethod("layoutImmediately", &View::LayoutImmediately)
+      .SetMethod("setNotifyEnterExitOnChild", &View::SetNotifyEnterExitOnChild)
+      .SetMethod("getNotifyEnterExitOnChild", &View::GetNotifyEnterExitOnChild);
 }
 
 void View::OnCrMouseEntered(const ui::MouseEvent& event) {
@@ -675,6 +677,13 @@ gfx::Insets View::GetInsets() const {
 
 void View::LayoutImmediately() {
   view()->DeprecatedLayoutImmediately();
+}
+
+void View::SetNotifyEnterExitOnChild(bool notify) {
+  view()->SetNotifyEnterExitOnChild(notify);
+}
+bool View::GetNotifyEnterExitOnChild() const {
+  return view()->GetNotifyEnterExitOnChild();
 }
 }  // namespace electron::api
 
