@@ -28,44 +28,13 @@
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_manager_base.h"
 #include "ui/views/layout/layout_types.h"
+#include "ui/views/view.h"
 #include "v8-local-handle.h"
 #include "v8-value.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "shell/browser/animation_util.h"
 #endif
-
-namespace electron::super {
-class SuperCrView : public views::View {
- public:
-  explicit SuperCrView(SuperCrViewDelegates* delegates)
-      : delegates_(delegates) {}
-
-  void OnMouseEntered(const ui::MouseEvent& event) override {
-    delegates_->OnCrMouseEntered(event);
-  }
-  void OnMouseExited(const ui::MouseEvent& event) override {
-    delegates_->OnCrMouseExited(event);
-  }
-  void OnMouseMoved(const ui::MouseEvent& event) override {
-    delegates_->OnCrMouseMoved(event);
-  }
-  bool OnMousePressed(const ui::MouseEvent& event) override {
-    return delegates_->OnCrMousePressed(event);
-  }
-  void OnMouseReleased(const ui::MouseEvent& event) override {
-    delegates_->OnCrMouseReleased(event);
-  }
-  bool OnMouseDragged(const ui::MouseEvent& event) override {
-    return delegates_->OnCrMouseDragged(event);
-  }
-  void OnMouseCaptureLost() override { delegates_->OnCrMouseCaptureLost(); }
-
- private:
-  SuperCrViewDelegates* delegates_;
-};
-}  // namespace electron::super
-
 namespace gin {
 
 template <>
@@ -235,7 +204,7 @@ View::View(views::View* view) : view_(view) {
   view_->AddObserver(this);
 }
 
-View::View() : View(new super::SuperCrView(this)) {}
+View::View() : View(new super::SuperCrView<views::View>(this)) {}
 
 View::~View() {
   if (!view_)
@@ -480,7 +449,8 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("getInsets", &View::GetInsets)
       .SetMethod("layoutImmediately", &View::LayoutImmediately)
       .SetMethod("setNotifyEnterExitOnChild", &View::SetNotifyEnterExitOnChild)
-      .SetMethod("getNotifyEnterExitOnChild", &View::GetNotifyEnterExitOnChild);
+      .SetMethod("getNotifyEnterExitOnChild", &View::GetNotifyEnterExitOnChild)
+      .SetMethod("invalidateLayout", &View::InvalidateLayout);
 }
 
 void View::OnCrMouseEntered(const ui::MouseEvent& event) {
@@ -574,6 +544,7 @@ bool View::OnCrMousePressed(const ui::MouseEvent& event) {
     ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args);
     if (ret.IsEmpty()) {
       try_catch.Exception();
+      return result;
     }
   }
   if (ret.ToLocalChecked()->IsTrue()) {
@@ -626,6 +597,7 @@ bool View::OnCrMouseDragged(const ui::MouseEvent& event) {
     ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args);
     if (ret.IsEmpty()) {
       try_catch.Exception();
+      return result;
     }
   }
   if (ret.ToLocalChecked()->IsTrue()) {
@@ -677,6 +649,10 @@ gfx::Insets View::GetInsets() const {
 
 void View::LayoutImmediately() {
   view()->DeprecatedLayoutImmediately();
+}
+
+void View::InvalidateLayout() {
+  view()->InvalidateLayout();
 }
 
 void View::SetNotifyEnterExitOnChild(bool notify) {

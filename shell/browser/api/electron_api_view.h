@@ -9,29 +9,12 @@
 
 #include "base/memory/raw_ptr.h"
 #include "gin/handle.h"
+#include "shell/browser/api/super_cr_view.h"
 #include "shell/common/color_util.h"
 #include "shell/common/gin_helper/event_emitter.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 #include "v8/include/v8-value.h"
-
-namespace electron::super {
-class SuperCrViewDelegates {
- public:
-  friend class SuperCrView;
-
- protected:
-  // 鼠标事件相关
-  virtual void OnCrMouseEntered(const ui::MouseEvent& event) = 0;
-  virtual void OnCrMouseExited(const ui::MouseEvent& event) = 0;
-  virtual void OnCrMouseMoved(const ui::MouseEvent& event) = 0;
-  virtual bool OnCrMousePressed(const ui::MouseEvent& event) = 0;
-  virtual void OnCrMouseReleased(const ui::MouseEvent& event) = 0;
-  virtual bool OnCrMouseDragged(const ui::MouseEvent& event) = 0;
-  virtual void OnCrMouseCaptureLost() = 0;
-};
-
-}  // namespace electron::super
 
 namespace electron::api {
 
@@ -80,6 +63,7 @@ class View : public gin_helper::EventEmitter<View>,
   void SetPreferredSize(gfx::Size size);
 
   void LayoutImmediately();
+  void InvalidateLayout();
 
   void SetNotifyEnterExitOnChild(bool notify);
   bool GetNotifyEnterExitOnChild() const;

@@ -342,6 +342,7 @@ filenames = {
     "shell/browser/api/process_metric.h",
     "shell/browser/api/save_page_handler.cc",
     "shell/browser/api/save_page_handler.h",
+    "shell/browser/api/super_cr_view.h",
     "shell/browser/api/ui_event.cc",
     "shell/browser/api/ui_event.h",
     "shell/browser/api/views/electron_api_image_view.cc",

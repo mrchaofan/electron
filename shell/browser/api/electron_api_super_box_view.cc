@@ -5,6 +5,7 @@
 #include "shell/browser/api/electron_api_super_box_view.h"
 #include <string>
 
+#include "shell/browser/api/super_cr_view.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_helper/constructor.h"
 #include "shell/common/gin_helper/dictionary.h"
@@ -88,7 +89,8 @@ struct Converter<views::LayoutAlignment> {
 
 namespace electron::api {
 
-SuperBoxView::SuperBoxView() : View(new views::BoxLayoutView()) {
+SuperBoxView::SuperBoxView()
+    : View(new super::SuperCrView<views::BoxLayoutView>(this)) {
   view()->set_owned_by_client();
 }
 

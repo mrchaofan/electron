@@ -1,5 +1,6 @@
 #include "shell/browser/api/electron_api_super_layout_view.h"
 #include <iostream>
+#include "shell/browser/api/super_cr_view.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
@@ -11,10 +12,11 @@
 
 namespace electron::super {
 
-class SuperCrLayoutView : public views::View {
+class SuperCrLayoutView : public SuperCrView<views::View> {
  public:
-  explicit SuperCrLayoutView(SuperCrLayoutViewDelegates* delegates)
-      : delegates_(delegates) {}
+  explicit SuperCrLayoutView(SuperCrViewDelegates* viewDelegates,
+                             SuperCrLayoutViewDelegates* layoutDelegates)
+      : SuperCrView<views::View>(viewDelegates), delegates_(layoutDelegates) {}
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override {
     return delegates_->CalculateCrPreferredSize(available_size);
@@ -36,7 +38,7 @@ class SuperCrLayoutView : public views::View {
 namespace electron::api {
 
 SuperLayoutView::SuperLayoutView()
-    : View(new electron::super::SuperCrLayoutView(this)) {
+    : View(new electron::super::SuperCrLayoutView(this, this)) {
   view()->set_owned_by_client();
 }
 
