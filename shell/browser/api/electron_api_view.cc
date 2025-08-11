@@ -469,10 +469,8 @@ void View::OnCrMouseEntered(const ui::MouseEvent& event) {
       super::SuperMouseEvent::Create(isolate(), event);
   v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
-    v8::TryCatch try_catch(isolate());
     if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
-      try_catch.Exception();
     }
   }
 }
@@ -492,10 +490,8 @@ void View::OnCrMouseExited(const ui::MouseEvent& event) {
       super::SuperMouseEvent::Create(isolate(), event);
   v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
-    v8::TryCatch try_catch(isolate());
     if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
-      try_catch.Exception();
     }
   }
 }
@@ -515,10 +511,8 @@ void View::OnCrMouseMoved(const ui::MouseEvent& event) {
       super::SuperMouseEvent::Create(isolate(), event);
   v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
-    v8::TryCatch try_catch(isolate());
     if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
-      try_catch.Exception();
     }
   }
 }
@@ -540,10 +534,8 @@ bool View::OnCrMousePressed(const ui::MouseEvent& event) {
       super::SuperMouseEvent::Create(isolate(), event);
   v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
-    v8::TryCatch try_catch(isolate());
     ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args);
     if (ret.IsEmpty()) {
-      try_catch.Exception();
       return result;
     }
   }
@@ -568,10 +560,8 @@ void View::OnCrMouseReleased(const ui::MouseEvent& event) {
       super::SuperMouseEvent::Create(isolate(), event);
   v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
-    v8::TryCatch try_catch(isolate());
     if (handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args)
             .IsEmpty()) {
-      try_catch.Exception();
     }
   }
 }
@@ -593,10 +583,8 @@ bool View::OnCrMouseDragged(const ui::MouseEvent& event) {
       super::SuperMouseEvent::Create(isolate(), event);
   v8::Local<v8::Value> args[] = {sme->GetWrapper()};
   {
-    v8::TryCatch try_catch(isolate());
     ret = handler->Call(isolate()->GetCurrentContext(), wrapper, 1, args);
     if (ret.IsEmpty()) {
-      try_catch.Exception();
       return result;
     }
   }
@@ -618,10 +606,8 @@ void View::OnCrMouseCaptureLost() {
           .ToLocalChecked()
           .As<v8::Function>();
   {
-    v8::TryCatch try_catch(isolate());
     if (handler->Call(isolate()->GetCurrentContext(), wrapper, 0, {})
             .IsEmpty()) {
-      try_catch.Exception();
     }
   }
 }
