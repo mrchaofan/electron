@@ -14,6 +14,7 @@
 #include "content/public/common/color_parser.h"
 #include "electron/buildflags/buildflags.h"
 #include "gin/dictionary.h"
+#include "gin/handle.h"
 #include "shell/browser/api/electron_api_menu.h"
 #include "shell/browser/api/electron_api_view.h"
 #include "shell/browser/api/electron_api_web_contents.h"
@@ -882,6 +883,18 @@ void BaseWindow::MoveTabToNewWindow() {
   window_->MoveTabToNewWindow();
 }
 
+void BaseWindow::SetCapture(gin::Handle<View> view) {
+  window_->widget()->SetCapture(view->view());
+}
+
+void BaseWindow::ReleaseCapture() {
+  window_->widget()->ReleaseCapture();
+}
+
+bool BaseWindow::HasCapture() {
+  return window_->widget()->HasCapture();
+}
+
 void BaseWindow::ToggleTabBar() {
   window_->ToggleTabBar();
 }
@@ -1303,7 +1316,10 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
       .SetMethod("setTitleBarOverlay", &BaseWindow::SetTitleBarOverlay)
 #endif
-      .SetProperty("id", &BaseWindow::GetID);
+      .SetProperty("id", &BaseWindow::GetID)
+      .SetMethod("setCapture", &BaseWindow::SetCapture)
+      .SetMethod("releaseCapture", &BaseWindow::ReleaseCapture)
+      .SetMethod("hasCapture", &BaseWindow::HasCapture);
 }
 
 }  // namespace electron::api
