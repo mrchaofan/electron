@@ -12,6 +12,7 @@
 #include "shell/browser/api/super_cr_view.h"
 #include "shell/common/color_util.h"
 #include "shell/common/gin_helper/event_emitter.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 #include "v8/include/v8-value.h"
@@ -83,6 +84,9 @@ class View : public gin_helper::EventEmitter<View>,
   void OnCrMouseReleased(const ui::MouseEvent& event) override;
   bool OnCrMouseDragged(const ui::MouseEvent& event) override;
   void OnCrMouseCaptureLost() override;
+  void SetPaintToLayer();
+  void SetTransform(const gfx::Transform& transform);
+  gfx::Transform GetTransform() const;
 
  private:
   void ReorderChildView(gin::Handle<View> child, size_t index);

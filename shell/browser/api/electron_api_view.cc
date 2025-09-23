@@ -24,6 +24,7 @@
 #include "shell/common/node_includes.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_manager_base.h"
@@ -450,7 +451,10 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("layoutImmediately", &View::LayoutImmediately)
       .SetMethod("setNotifyEnterExitOnChild", &View::SetNotifyEnterExitOnChild)
       .SetMethod("getNotifyEnterExitOnChild", &View::GetNotifyEnterExitOnChild)
-      .SetMethod("invalidateLayout", &View::InvalidateLayout);
+      .SetMethod("invalidateLayout", &View::InvalidateLayout)
+      .SetMethod("setPaintToLayer", &View::SetPaintToLayer)
+      .SetMethod("setTransform", &View::SetTransform)
+      .SetMethod("getTransform", &View::GetTransform);
 }
 
 void View::OnCrMouseEntered(const ui::MouseEvent& event) {
@@ -646,6 +650,18 @@ void View::SetNotifyEnterExitOnChild(bool notify) {
 }
 bool View::GetNotifyEnterExitOnChild() const {
   return view()->GetNotifyEnterExitOnChild();
+}
+
+void View::SetPaintToLayer() {
+  view()->SetPaintToLayer();
+}
+
+gfx::Transform View::GetTransform() const {
+  return view()->GetTransform();
+}
+
+void View::SetTransform(const gfx::Transform& transform) {
+  view()->SetTransform(transform);
 }
 }  // namespace electron::api
 

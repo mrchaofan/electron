@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "gin/converter.h"
 #include "gin/data_object_builder.h"
 #include "shell/common/color_util.h"
 #include "shell/common/gin_helper/dictionary.h"
@@ -17,6 +18,7 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/resize_utils.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace gin {
 
@@ -227,6 +229,46 @@ bool Converter<WrappedSkColor>::FromV8(v8::Isolate* isolate,
   if (!gin::ConvertFromV8(isolate, val, &str))
     return false;
   *out = electron::ParseCSSColor(str);
+  return true;
+}
+
+// C++ -> V8
+v8::Local<v8::Value> Converter<gfx::Transform>::ToV8(
+    v8::Isolate* isolate,
+    const gfx::Transform& transform) {
+  v8::Local<v8::Array> arr = v8::Array::New(isolate, 16);
+
+  int index = 0;
+  for (int r = 0; r < 4; ++r) {
+    for (int c = 0; c < 4; ++c) {
+      arr->Set(isolate->GetCurrentContext(), index++,
+               v8::Number::New(isolate, transform.rc(r, c)))
+          .Check();
+    }
+  }
+  return arr;
+}
+
+bool Converter<gfx::Transform>::FromV8(v8::Isolate* isolate,
+                                       v8::Local<v8::Value> val,
+                                       gfx::Transform* out) {
+  if (!val->IsArray())
+    return false;
+
+  v8::Local<v8::Array> arr = val.As<v8::Array>();
+  if (arr->Length() != 16)
+    return false;
+
+  float mat[16];
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  for (uint32_t i = 0; i < 16; ++i) {
+    v8::Local<v8::Value> v;
+    if (!arr->Get(context, i).ToLocal(&v) || !v->IsNumber())
+      return false;
+    mat[i] = static_cast<float>(v->NumberValue(context).ToChecked());
+  }
+
+  *out = gfx::Transform::ColMajorF(mat);
   return true;
 }
 

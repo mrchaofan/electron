@@ -7,6 +7,7 @@
 
 #include "gin/converter.h"
 #include "shell/common/color_util.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace display {
 class Display;
@@ -85,6 +86,17 @@ struct Converter<WrappedSkColor> {
   static bool FromV8(v8::Isolate* isolate,
                      v8::Local<v8::Value> val,
                      WrappedSkColor* out);
+};
+
+template <>
+struct Converter<gfx::Transform> {
+  // C++ -> V8
+  static v8::Local<v8::Value> ToV8(v8::Isolate* isolate,
+                                   const gfx::Transform& transform);
+
+  static bool FromV8(v8::Isolate* isolate,
+                     v8::Local<v8::Value> val,
+                     gfx::Transform* out);
 };
 
 }  // namespace gin

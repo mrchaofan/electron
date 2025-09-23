@@ -752,6 +752,7 @@ std::shared_ptr<node::Environment> NodeBindings::CreateEnvironment(
 
   gin_helper::Dictionary process(context->GetIsolate(), env->process_object());
   process.SetReadOnly("type", process_type);
+  process.SetReadOnly("super", true);
 
   if (browser_env_ == BrowserEnvironment::kBrowser ||
       browser_env_ == BrowserEnvironment::kRenderer) {
