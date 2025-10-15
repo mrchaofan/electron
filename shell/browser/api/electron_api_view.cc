@@ -11,10 +11,12 @@
 #include <string>
 #include <utility>
 
+#include "ash/style/rounded_rect_cutout_path_builder.h"
 #include "gin/converter.h"
 #include "gin/data_object_builder.h"
 #include "gin/handle.h"
 #include "gin/wrappable.h"
+#include "include/core/SkColor.h"
 #include "shell/browser/api/electron_api_super_mouse_event.h"
 #include "shell/browser/javascript_environment.h"
 #include "shell/common/gin_converters/callback_converter.h"
@@ -22,6 +24,7 @@
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/transform.h"
@@ -380,6 +383,38 @@ void View::SetBackgroundColor(std::optional<WrappedSkColor> color) {
   view_->SetBackground(color ? views::CreateSolidBackground(*color) : nullptr);
 }
 
+void View::SetBorderRadius(int radius) {
+  border_radius_ = radius;
+  ApplyBorderRadius();
+}
+
+void View::ApplyBorderRadius() {
+  if (!border_radius_.has_value() || !view_)
+    return;
+
+  auto size = view_->bounds().size();
+
+  // Restrict border radius to the constraints set in the path builder class.
+  // If the constraints are exceeded, the builder will crash.
+  int radius;
+  {
+    float r = border_radius_.value() * 1.f;
+    r = std::min(r, size.width() / 2.f);
+    r = std::min(r, size.height() / 2.f);
+    r = std::max(r, 0.f);
+    radius = std::floor(r);
+  }
+
+  // RoundedRectCutoutPathBuilder has a minimum size of 32 x 32.
+  if (radius > 0 && size.width() >= 32 && size.height() >= 32) {
+    auto builder = ash::RoundedRectCutoutPathBuilder(gfx::SizeF(size));
+    builder.CornerRadius(radius);
+    view_->SetClipPath(builder.Build());
+  } else {
+    view_->SetClipPath(SkPath());
+  }
+}
+
 void View::SetVisible(bool visible) {
   if (!view_)
     return;
@@ -387,6 +422,7 @@ void View::SetVisible(bool visible) {
 }
 
 void View::OnViewBoundsChanged(views::View* observed_view) {
+  ApplyBorderRadius();
   Emit("bounds-changed");
 }
 
@@ -441,6 +477,7 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setBounds", &View::SetBounds)
       .SetMethod("getBounds", &View::GetBounds)
       .SetMethod("setBackgroundColor", &View::SetBackgroundColor)
+      .SetMethod("setBorderRadius", &View::SetBorderRadius)
       .SetMethod("setLayout", &View::SetLayout)
       .SetMethod("setVisible", &View::SetVisible)
       .SetMethod("getPreferredSize", &View::GetPreferredSize)
@@ -454,7 +491,10 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("invalidateLayout", &View::InvalidateLayout)
       .SetMethod("setPaintToLayer", &View::SetPaintToLayer)
       .SetMethod("setTransform", &View::SetTransform)
-      .SetMethod("getTransform", &View::GetTransform);
+      .SetMethod("getTransform", &View::GetTransform)
+      .SetMethod("setLayerFillsBoundsOpaquely",
+                 &View::SetLayerFillsBoundsOpaquely)
+      .SetMethod("setLayerColor", &View::SetLayerColor);
 }
 
 void View::OnCrMouseEntered(const ui::MouseEvent& event) {
@@ -662,6 +702,19 @@ gfx::Transform View::GetTransform() const {
 
 void View::SetTransform(const gfx::Transform& transform) {
   view()->SetTransform(transform);
+}
+
+void View::SetLayerFillsBoundsOpaquely(bool isOpaque) {
+  ui::Layer* layer = view()->layer();
+  if (layer) {
+    layer->SetFillsBoundsOpaquely(isOpaque);
+  }
+}
+void View::SetLayerColor(std::optional<WrappedSkColor> color) {
+  ui::Layer* layer = view()->layer();
+  if (layer) {
+    layer->SetColor(color ? static_cast<SkColor>(*color) : SK_ColorTRANSPARENT);
+  }
 }
 }  // namespace electron::api
 

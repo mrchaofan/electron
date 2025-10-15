@@ -42,6 +42,7 @@ class View : public gin_helper::EventEmitter<View>,
   void SetLayout(v8::Isolate* isolate, v8::Local<v8::Object> value);
   std::vector<v8::Local<v8::Value>> GetChildren();
   void SetBackgroundColor(std::optional<WrappedSkColor> color);
+  void SetBorderRadius(int radius);
   void SetVisible(bool visible);
 
   // views::ViewObserver
@@ -52,6 +53,7 @@ class View : public gin_helper::EventEmitter<View>,
   bool HitTestPoint(const gfx::Point& point) const;
 
   views::View* view() const { return view_; }
+  std::optional<int> border_radius() const { return border_radius_; }
 
   // disable copy
   View(const View&) = delete;
@@ -87,11 +89,15 @@ class View : public gin_helper::EventEmitter<View>,
   void SetPaintToLayer();
   void SetTransform(const gfx::Transform& transform);
   gfx::Transform GetTransform() const;
+  void SetLayerFillsBoundsOpaquely(bool isOpaque);
+  void SetLayerColor(std::optional<WrappedSkColor> color);
 
  private:
+  void ApplyBorderRadius();
   void ReorderChildView(gin::Handle<View> child, size_t index);
 
   std::vector<ChildPair> child_views_;
+  std::optional<int> border_radius_;
 
   bool delete_view_ = true;
   raw_ptr<views::View> view_ = nullptr;

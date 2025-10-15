@@ -4,6 +4,10 @@ const { View } = process._linkedBinding('electron_browser_view');
 
 Object.setPrototypeOf((View as any).prototype, EventEmitter.prototype);
 
+Object.defineProperty(View, '__native', {
+  get: () => true
+});
+
 (View as any).prototype.onMouseEntered = function onMouseEntered () {
 
 };
