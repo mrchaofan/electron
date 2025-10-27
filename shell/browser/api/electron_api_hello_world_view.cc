@@ -5,10 +5,12 @@
 #include "shell/browser/api/electron_api_hello_world_view.h"
 #include <string>
 
+#include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_helper/constructor.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
+#include "ui/gfx/font_list.h"
 
 namespace gin {
 
@@ -48,6 +50,17 @@ void HelloWorldView::SetText(const std::u16string text) {
   label_view()->SetText(text);
 }
 
+void HelloWorldView::SetFontList(const std::string font_str) {
+  const gfx::FontList font_list(font_str);
+  label_view()->SetFontList(font_list);
+}
+
+void HelloWorldView::SetEnabledColor(std::optional<WrappedSkColor> color) {
+  if (color) {
+    label_view()->SetEnabledColor(*color);
+  }
+}
+
 HelloWorldView::~HelloWorldView() = default;
 
 // static
@@ -63,7 +76,9 @@ void HelloWorldView::BuildPrototype(v8::Isolate* isolate,
                                     v8::Local<v8::FunctionTemplate> prototype) {
   prototype->SetClassName(gin::StringToV8(isolate, "HelloWorldView"));
   gin_helper::ObjectTemplateBuilder(isolate, prototype->PrototypeTemplate())
-      .SetMethod("setText", &HelloWorldView::SetText);
+      .SetMethod("setText", &HelloWorldView::SetText)
+      .SetMethod("setFontList", &HelloWorldView::SetFontList)
+      .SetMethod("setEnabledColor", &HelloWorldView::SetEnabledColor);
 }
 
 }  // namespace electron::api

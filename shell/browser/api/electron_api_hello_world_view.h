@@ -20,6 +20,8 @@ class HelloWorldView : public View {
                              v8::Local<v8::FunctionTemplate> prototype);
 
   void SetText(const std::u16string text);
+  void SetFontList(const std::string);
+  void SetEnabledColor(std::optional<WrappedSkColor> color);
 
  protected:
   HelloWorldView();
