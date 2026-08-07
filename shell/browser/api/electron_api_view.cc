@@ -7,24 +7,40 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "ash/style/rounded_rect_cutout_path_builder.h"
 #include "gin/data_object_builder.h"
 #include "gin/wrappable.h"
 #include "shell/browser/javascript_environment.h"
+#include "shell/browser/ui/layout_event_forwarding_view.h"
+#include "shell/browser/ui/mouse_event_forwarding_view.h"
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/gfx_converter.h"
+#include "shell/common/gin_converters/optional_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
+#include "shell/common/gin_helper/event.h"
+#include "shell/common/gin_helper/event_emitter_caller.h"
 #include "shell/common/gin_helper/handle.h"
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
 #include "ui/compositor/layer.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/shadow_value.h"
 #include "ui/views/animation/animation_builder.h"
+#include "ui/views/animation/ink_drop_painted_layer_delegates.h"
 #include "ui/views/background.h"
+#include "ui/views/border.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_manager_base.h"
+#include "ui/views/layout/layout_types.h"
+#include "ui/views/view_targeter.h"
+#include "ui/views/view_targeter_delegate.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "shell/browser/animation_util.h"
@@ -192,19 +208,142 @@ class JSLayoutManager : public views::LayoutManagerBase {
   LayoutCallback layout_callback_;
 };
 
-View::View(views::View* view) : view_(view) {
-  view_->set_owned_by_client(views::View::OwnedByClientPassKey{});
-  view_->AddObserver(this);
+class NativeView : public views::View,
+                   public electron::MouseEventForwardingView,
+                   public electron::LayoutEventForwardingView,
+                   public views::ViewTargeterDelegate {
+ public:
+  explicit NativeView(electron::api::View* delegate)
+      : MouseEventForwardingView(delegate),
+        LayoutEventForwardingView(delegate) {
+    SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
+  }
+
+  bool DoesIntersectRect(const views::View* target,
+                         const gfx::Rect& rect) const override {
+    DCHECK_EQ(this, target);
+    if (!views::ViewTargeterDelegate::DoesIntersectRect(target, rect))
+      return false;
+    if (rect.width() != 1 || rect.height() != 1)
+      return true;
+    return ForwardHitTestPoint(rect.origin());
+  }
+
+  bool OnMousePressed(const ui::MouseEvent& event) override {
+    return ForwardMousePressed(event);
+  }
+
+  bool OnMouseDragged(const ui::MouseEvent& event) override {
+    return ForwardMouseDragged(event);
+  }
+
+  void OnMouseReleased(const ui::MouseEvent& event) override {
+    ForwardMouseReleased(event);
+  }
+
+  void OnMouseCaptureLost() override { ForwardMouseCaptureLost(); }
+
+  void OnMouseMoved(const ui::MouseEvent& event) override {
+    ForwardMouseMoved(event);
+  }
+
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    ForwardMouseEntered(event);
+  }
+
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    ForwardMouseExited(event);
+  }
+
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override {
+    return ForwardMouseWheel(event);
+  }
+
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    auto preferred_size = ForwardCalculatePreferredSize(available_size);
+    return preferred_size.value_or(gfx::Size());
+  }
+
+  void Layout(PassKey) override {
+    LayoutEventForwardingView::OnLayout();
+    LayoutSuperclass<views::View>(this);
+  }
+};
+
+void SetMouseEventProperties(gin_helper::Dictionary* event_dict,
+                             const ui::MouseEvent& event) {
+  event_dict->Set("location", event.location_f());
+  event_dict->Set("rootLocation", event.root_location_f());
+  event_dict->Set("flags", event.flags());
+  event_dict->Set("changedButtonFlags", event.changed_button_flags());
+  event_dict->Set("clickCount", event.GetClickCount());
 }
 
-View::View() : View(new views::View()) {}
+void SetMouseWheelEventProperties(gin_helper::Dictionary* event_dict,
+                                  const ui::MouseWheelEvent& event) {
+  SetMouseEventProperties(event_dict, event);
+  event_dict->Set("offsetX", event.x_offset());
+  event_dict->Set("offsetY", event.y_offset());
+}
+
+// |default_return_value| determines both whether the JavaScript event exposes
+// returnValue and its initial value. The result is returned to the
+// corresponding Chromium callback after applying preventDefault().
+template <typename PopulateEventData>
+bool EmitUnifiedEventObject(View* view,
+                            std::string_view name,
+                            std::optional<bool> default_return_value,
+                            PopulateEventData populate_event_data) {
+  v8::Isolate* isolate = view->isolate();
+  v8::HandleScope handle_scope(isolate);
+
+  v8::Local<v8::Object> wrapper = view->GetWrapper();
+  if (wrapper.IsEmpty())
+    return default_return_value.value_or(false);
+
+  gin_helper::internal::Event* js_event =
+      gin_helper::internal::Event::New(isolate);
+  v8::Local<v8::Object> event_object =
+      js_event->GetWrapper(isolate).ToLocalChecked();
+
+  gin_helper::Dictionary event_dict(isolate, event_object);
+  if (default_return_value.has_value())
+    event_dict.Set("returnValue", *default_return_value);
+
+  populate_event_data(&event_dict);
+  gin_helper::EmitEvent(isolate, wrapper, name, event_object);
+
+  if (!default_return_value.has_value())
+    return false;
+
+  bool return_value = *default_return_value;
+  event_dict.Get("returnValue", &return_value);
+  return return_value && !js_event->GetDefaultPrevented();
+}
+
+View::View(views::View* view) {
+  InitializeView(view);
+}
+
+View::View() {
+  InitializeView(new NativeView(this));
+}
 
 View::~View() {
   if (!view_)
     return;
+  ClearShadow();
   view_->RemoveObserver(this);
   if (delete_view_)
     view_.ClearAndDelete();
+}
+
+void View::InitializeView(views::View* view) {
+  view_ = view;
+  view_->set_owned_by_client(views::View::OwnedByClientPassKey{});
+  view_->AddObserver(this);
+  view_->SetNotifyEnterExitOnChild(true);
 }
 
 void View::ReorderChildView(gin_helper::Handle<View> child, size_t index) {
@@ -421,6 +560,12 @@ gfx::Rect View::GetBounds() const {
   return view_->bounds();
 }
 
+gfx::Rect View::GetLocalBounds() const {
+  if (!view_)
+    return {};
+  return view_->GetLocalBounds();
+}
+
 void View::SetLayout(v8::Isolate* isolate, v8::Local<v8::Object> value) {
   if (!view_)
     return;
@@ -488,6 +633,7 @@ void View::SetBackgroundColor(std::optional<WrappedSkColor> color) {
 void View::SetBorderRadius(int radius) {
   border_radius_ = radius;
   ApplyBorderRadius();
+  UpdateShadowLayer();
 }
 
 void View::ApplyBorderRadius() {
@@ -517,6 +663,52 @@ void View::ApplyBorderRadius() {
   }
 }
 
+void View::SetMasksToBounds(bool masks_to_bounds) {
+  ui::Layer* layer = GetLayer();
+  if (!layer)
+    return;
+
+  layer->SetMasksToBounds(masks_to_bounds);
+}
+
+void View::SetBorder(gin::Arguments* args) {
+  if (!view_)
+    return;
+
+  v8::Local<v8::Value> value;
+  if (!args->GetNext(&value) || value->IsNullOrUndefined()) {
+    view_->SetBorder(nullptr);
+    return;
+  }
+
+  gin_helper::Dictionary dict;
+  if (!gin::ConvertFromV8(isolate(), value, &dict)) {
+    args->ThrowTypeError("border must be an object");
+    return;
+  }
+
+  int thickness = 1;
+  dict.Get("thickness", &thickness);
+  if (thickness <= 0) {
+    view_->SetBorder(nullptr);
+    return;
+  }
+
+  float radius = 0;
+  dict.Get("radius", &radius);
+  radius = std::max(radius, 0.f);
+
+  WrappedSkColor color = SK_ColorBLACK;
+  dict.Get("color", &color);
+
+  // Only a solid line style is currently supported.
+  view_->SetBorder(
+      radius > 0
+          ? views::CreateRoundedRectBorder(thickness, radius,
+                                           static_cast<SkColor>(color))
+          : views::CreateSolidBorder(thickness, static_cast<SkColor>(color)));
+}
+
 void View::SetBackgroundBlur(int blur_radius) {
   if (!view_)
     return;
@@ -542,8 +734,276 @@ bool View::GetVisible() const {
   return view_ ? view_->GetVisible() : false;
 }
 
+gfx::Size View::GetPreferredSize() const {
+  return view_ ? view_->GetPreferredSize() : gfx::Size();
+}
+
+void View::SetPreferredSize(std::optional<gfx::Size> size) {
+  if (view_)
+    view_->SetPreferredSize(std::move(size));
+}
+
+void View::SizeToContents() {
+  if (view_)
+    view_->SizeToPreferredSize();
+}
+
+void View::InvalidateLayout() {
+  if (view_)
+    view_->InvalidateLayout();
+}
+
+void View::SchedulePaint() {
+  if (view_)
+    view_->SchedulePaint();
+}
+
+void View::PreferredSizeChanged() {
+  if (view_)
+    view_->PreferredSizeChanged();
+}
+
+void View::SetTranslation(float x, std::optional<float> y) {
+  ui::Layer* layer = GetLayer();
+  if (!layer)
+    return;
+
+  gfx::Transform transform = layer->transform();
+  transform.Translate(x, y.value_or(0.0f));
+  layer->SetTransform(transform);
+  UpdateShadowLayer();
+}
+
+void View::SetScale(float x, std::optional<float> y) {
+  ui::Layer* layer = GetLayer();
+  if (!layer)
+    return;
+
+  gfx::Transform transform = layer->transform();
+  transform.Scale(x, y.value_or(x));
+  layer->SetTransform(transform);
+  UpdateShadowLayer();
+}
+
+void View::SetRotation(float degrees) {
+  ui::Layer* layer = GetLayer();
+  if (!layer)
+    return;
+
+  gfx::Transform transform = layer->transform();
+  transform.Rotate(degrees);
+  layer->SetTransform(transform);
+  UpdateShadowLayer();
+}
+
+void View::ResetTransform() {
+  ui::Layer* layer = GetLayer();
+  if (!layer)
+    return;
+
+  layer->SetTransform(gfx::Transform());
+  UpdateShadowLayer();
+}
+
+void View::SetShadow(gin::Arguments* args) {
+  gin_helper::Dictionary dict;
+  if (!args->GetNext(&dict)) {
+    args->ThrowTypeError("shadow options must be an object");
+    return;
+  }
+
+  BoxShadowOptions options;
+  WrappedSkColor color = options.color;
+  dict.Get("color", &color);
+  options.color = color;
+  dict.Get("offsetX", &options.offset_x);
+  dict.Get("offsetY", &options.offset_y);
+  dict.Get("blurRadius", &options.blur_radius);
+  dict.Get("spreadRadius", &options.spread_radius);
+  options.blur_radius = std::max(options.blur_radius, 0);
+  shadow_corner_radius_ = border_radius().value_or(0);
+  dict.Get("borderRadius", &shadow_corner_radius_);
+  shadow_corner_radius_ = std::max(shadow_corner_radius_, 0);
+  shadow_options_ = options;
+  UpdateShadowLayer();
+}
+
+void View::ClearShadow() {
+  if (shadow_layer_) {
+    if (view_)
+      view_->RemoveLayerFromRegions(shadow_layer_.get());
+    shadow_layer_->set_delegate(nullptr);
+    shadow_layer_.reset();
+  }
+  shadow_delegate_.reset();
+  shadow_options_.reset();
+}
+
+void View::SetLayerOpacity(float opacity) {
+  ui::Layer* layer = GetLayer();
+  if (!layer)
+    return;
+
+  layer->SetOpacity(std::clamp(opacity, 0.0f, 1.0f));
+}
+
+void View::UpdateShadowLayer() {
+  if (!view_ || !shadow_options_)
+    return;
+
+  const BoxShadowOptions& options = *shadow_options_;
+  const int spread = options.spread_radius;
+  const gfx::Rect shadowed_bounds(-spread, -spread,
+                                  std::max(0, view_->width() + 2 * spread),
+                                  std::max(0, view_->height() + 2 * spread));
+  const int corner_radius = std::clamp(
+      shadow_corner_radius_ + spread, 0,
+      std::min(shadowed_bounds.width(), shadowed_bounds.height()) / 2);
+  const gfx::ShadowValues shadows = {
+      gfx::ShadowValue(gfx::Vector2d(options.offset_x, options.offset_y),
+                       options.blur_radius, options.color)};
+
+  if (shadow_layer_)
+    shadow_layer_->set_delegate(nullptr);
+  shadow_delegate_ = std::make_unique<views::BorderShadowLayerDelegate>(
+      shadows, shadowed_bounds, SK_ColorTRANSPARENT, corner_radius);
+  if (!shadow_layer_) {
+    shadow_layer_ = std::make_unique<ui::Layer>(ui::LAYER_TEXTURED);
+    shadow_layer_->SetFillsBoundsOpaquely(false);
+    ui::Layer* layer = GetLayer();
+    if (!layer)
+      return;
+    view_->AddLayerToRegion(shadow_layer_.get(), views::LayerRegion::kBelow);
+  }
+  shadow_layer_->set_delegate(shadow_delegate_.get());
+
+  ui::Layer* layer = GetLayer();
+  if (!layer)
+    return;
+  const gfx::Rect painted_bounds =
+      gfx::ToEnclosingRect(shadow_delegate_->GetPaintedBounds());
+  shadow_layer_->SetBounds(gfx::Rect(painted_bounds.size()) +
+                           layer->bounds().OffsetFromOrigin());
+  gfx::Transform transform = layer->transform();
+  transform.Translate(painted_bounds.x(), painted_bounds.y());
+  shadow_layer_->SetTransform(transform);
+  shadow_layer_->SchedulePaint(gfx::Rect(shadow_layer_->size()));
+}
+
+void View::EmitEventObject(std::string_view name) {
+  EmitUnifiedEventObject(this, name, std::nullopt,
+                         [](gin_helper::Dictionary*) {});
+}
+
+void View::EmitMouseEvent(std::string_view name, const ui::MouseEvent& event) {
+  EmitUnifiedEventObject(this, name, std::nullopt,
+                         [&event](gin_helper::Dictionary* event_dict) {
+                           SetMouseEventProperties(event_dict, event);
+                         });
+}
+
+bool View::EmitMouseEventAndReturnValue(std::string_view name,
+                                        const ui::MouseEvent& event,
+                                        bool default_return_value) {
+  return EmitUnifiedEventObject(this, name, default_return_value,
+                                [&event](gin_helper::Dictionary* event_dict) {
+                                  SetMouseEventProperties(event_dict, event);
+                                });
+}
+
+bool View::EmitMouseWheelEventAndReturnValue(std::string_view name,
+                                             const ui::MouseWheelEvent& event) {
+  return EmitUnifiedEventObject(
+      this, name, true, [&event](gin_helper::Dictionary* event_dict) {
+        SetMouseWheelEventProperties(event_dict, event);
+      });
+}
+
+bool View::EmitHitTestPointEventAndReturnValue(std::string_view name,
+                                               const gfx::Point& point) {
+  return EmitUnifiedEventObject(this, name, true,
+                                [&point](gin_helper::Dictionary* event_dict) {
+                                  event_dict->Set("location", point);
+                                });
+}
+
+bool View::OnMousePressedFromNative(const ui::MouseEvent& event) {
+  return EmitMouseEventAndReturnValue("mouse-pressed", event, false);
+}
+
+bool View::OnMouseDraggedFromNative(const ui::MouseEvent& event) {
+  return EmitMouseEventAndReturnValue("mouse-dragged", event, false);
+}
+
+void View::OnMouseReleasedFromNative(const ui::MouseEvent& event) {
+  EmitMouseEvent("mouse-released", event);
+}
+
+void View::OnMouseCaptureLostFromNative() {
+  EmitEventObject("mouse-capture-lost");
+}
+
+void View::OnMouseMovedFromNative(const ui::MouseEvent& event) {
+  EmitMouseEvent("mouse-moved", event);
+}
+
+void View::OnMouseEnteredFromNative(const ui::MouseEvent& event) {
+  EmitMouseEvent("mouse-entered", event);
+}
+
+void View::OnMouseExitedFromNative(const ui::MouseEvent& event) {
+  EmitMouseEvent("mouse-exited", event);
+}
+
+bool View::OnMouseWheelFromNative(const ui::MouseWheelEvent& event) {
+  return EmitMouseWheelEventAndReturnValue("mouse-wheel", event);
+}
+
+bool View::OnHitTestPointFromNative(const gfx::Point& point) {
+  return EmitHitTestPointEventAndReturnValue("hit-test-point", point);
+}
+
+std::optional<gfx::Size> View::OnCalculatePreferredSizeFromNative(
+    const views::SizeBounds& available_size) {
+  v8::Isolate* isolate = this->isolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Object> wrapper = GetWrapper();
+  if (wrapper.IsEmpty())
+    return std::nullopt;
+
+  const double width = available_size.width().is_bounded()
+                           ? available_size.width().value()
+                           : std::numeric_limits<double>::infinity();
+  const double height = available_size.height().is_bounded()
+                            ? available_size.height().value()
+                            : std::numeric_limits<double>::infinity();
+  v8::Local<v8::Value> available_size_value = gin::DataObjectBuilder(isolate)
+                                                  .Set("width", width)
+                                                  .Set("height", height)
+                                                  .Build();
+  v8::Local<v8::Value> result = gin_helper::CustomEmit(
+      isolate, wrapper, "calculatePreferredSize", available_size_value);
+
+  gfx::Size size;
+  if (!gin::ConvertFromV8(isolate, result, &size))
+    return std::nullopt;
+  return size;
+}
+
+void View::OnLayoutFromNative() {
+  if (!view_)
+    return;
+
+  EmitUnifiedEventObject(this, "layout", std::nullopt,
+                         [this](gin_helper::Dictionary* event_dict) {
+                           event_dict->Set("width", view_->width());
+                           event_dict->Set("height", view_->height());
+                         });
+}
+
 void View::OnViewBoundsChanged(views::View* observed_view) {
   ApplyBorderRadius();
+  UpdateShadowLayer();
   Emit("bounds-changed");
 }
 
@@ -597,12 +1057,28 @@ void View::BuildPrototype(v8::Isolate* isolate,
       .SetProperty("children", &View::GetChildren)
       .SetMethod("setBounds", &View::SetBounds)
       .SetMethod("getBounds", &View::GetBounds)
+      .SetMethod("getLocalBounds", &View::GetLocalBounds)
       .SetMethod("setBackgroundColor", &View::SetBackgroundColor)
       .SetMethod("setBorderRadius", &View::SetBorderRadius)
+      .SetMethod("setMasksToBounds", &View::SetMasksToBounds)
+      .SetMethod("setBorder", &View::SetBorder)
       .SetMethod("setBackgroundBlur", &View::SetBackgroundBlur)
       .SetMethod("setLayout", &View::SetLayout)
+      .SetMethod("invalidateLayout", &View::InvalidateLayout)
+      .SetMethod("schedulePaint", &View::SchedulePaint)
+      .SetMethod("preferredSizeChanged", &View::PreferredSizeChanged)
+      .SetMethod("setTranslation", &View::SetTranslation)
+      .SetMethod("setScale", &View::SetScale)
+      .SetMethod("setRotation", &View::SetRotation)
+      .SetMethod("resetTransform", &View::ResetTransform)
+      .SetMethod("setShadow", &View::SetShadow)
+      .SetMethod("clearShadow", &View::ClearShadow)
+      .SetMethod("setLayerOpacity", &View::SetLayerOpacity)
       .SetMethod("setVisible", &View::SetVisible)
-      .SetMethod("getVisible", &View::GetVisible);
+      .SetMethod("getVisible", &View::GetVisible)
+      .SetMethod("getPreferredSize", &View::GetPreferredSize)
+      .SetMethod("setPreferredSize", &View::SetPreferredSize)
+      .SetMethod("sizeToContents", &View::SizeToContents);
 }
 
 }  // namespace electron::api

@@ -829,6 +829,10 @@ Resizes the window's client area (e.g. the web page) to `width` and `height`.
 
 Returns `Integer[]` - Contains the window's client area's width and height.
 
+#### `win.sizeToContents()`
+
+Resizes the window to fit its content view's preferred size.
+
 #### `win.setMinimumSize(width, height)`
 
 * `width` Integer
@@ -1397,6 +1401,19 @@ Makes the window ignore all mouse events.
 All mouse events happened in this window will be passed to the window below
 this window, but if this window has focus, it will still receive keyboard
 events.
+
+#### `win.setCapture(view)`
+
+* `view` [View](view.md)
+
+Requests mouse capture for the window and routes captured mouse events to
+`view`.
+
+The `view` must belong to this window.
+
+#### `win.releaseCapture()`
+
+Releases mouse capture currently held by this window.
 
 #### `win.setContentProtection(enable)` _macOS_ _Windows_
 

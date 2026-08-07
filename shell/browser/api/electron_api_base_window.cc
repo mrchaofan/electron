@@ -33,6 +33,7 @@
 #include "shell/common/node_includes.h"
 #include "shell/common/node_util.h"
 #include "shell/common/options_switches.h"
+#include "ui/views/widget/widget.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "shell/browser/native_window_views.h"
@@ -714,6 +715,45 @@ void BaseWindow::SetIgnoreMouseEvents(bool ignore, gin::Arguments* const args) {
   return window_->SetIgnoreMouseEvents(ignore, forward);
 }
 
+void BaseWindow::SetCapture(gin_helper::Handle<View> view,
+                            gin::Arguments* const args) {
+#if defined(TOOLKIT_VIEWS)
+  if (view.IsEmpty() || !view->view()) {
+    args->ThrowTypeError("Must pass a View instance");
+    return;
+  }
+
+  auto* widget = views::Widget::GetWidgetForNativeWindow(window_->GetNativeWindow());
+  if (!widget)
+    return;
+
+  if (view->view()->GetWidget() != widget) {
+    args->ThrowTypeError("The View must belong to this window");
+    return;
+  }
+
+  widget->SetCapture(view->view());
+#endif
+}
+
+void BaseWindow::ReleaseCapture() {
+#if defined(TOOLKIT_VIEWS)
+  if (auto* widget =
+          views::Widget::GetWidgetForNativeWindow(window_->GetNativeWindow())) {
+    widget->ReleaseCapture();
+  }
+#endif
+}
+
+void BaseWindow::SizeToContents() {
+#if defined(TOOLKIT_VIEWS)
+  if (auto* widget =
+          views::Widget::GetWidgetForNativeWindow(window_->GetNativeWindow())) {
+    widget->SetSize(widget->GetRootView()->GetPreferredSize());
+  }
+#endif
+}
+
 void BaseWindow::SetContentProtection(bool enable) {
   return window_->SetContentProtection(enable);
 }
@@ -1242,6 +1282,9 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setDocumentEdited", &BaseWindow::SetDocumentEdited)
       .SetMethod("isDocumentEdited", &BaseWindow::IsDocumentEdited)
       .SetMethod("setIgnoreMouseEvents", &BaseWindow::SetIgnoreMouseEvents)
+      .SetMethod("setCapture", &BaseWindow::SetCapture)
+      .SetMethod("releaseCapture", &BaseWindow::ReleaseCapture)
+      .SetMethod("sizeToContents", &BaseWindow::SizeToContents)
       .SetMethod("setContentProtection", &BaseWindow::SetContentProtection)
       .SetMethod("isContentProtected", &BaseWindow::IsContentProtected)
       .SetMethod("setFocusable", &BaseWindow::SetFocusable)

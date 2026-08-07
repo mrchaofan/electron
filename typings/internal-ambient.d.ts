@@ -292,6 +292,7 @@ declare namespace NodeJS {
     _linkedBinding(name: 'electron_common_v8_util'): V8UtilBinding;
     _linkedBinding(name: 'electron_browser_app'): { app: Electron.App; App: Function };
     _linkedBinding(name: 'electron_browser_auto_updater'): { autoUpdater: Electron.AutoUpdater };
+    _linkedBinding(name: 'electron_browser_box_layout_view'): { BoxLayoutView: typeof Electron.BoxLayoutView };
     _linkedBinding(name: 'electron_browser_crash_reporter'): CrashReporterBinding;
     _linkedBinding(name: 'electron_browser_desktop_capturer'): {
       createDesktopCapturer(): ElectronInternal.DesktopCapturer;
@@ -300,6 +301,7 @@ declare namespace NodeJS {
     _linkedBinding(name: 'electron_browser_event_emitter'): { setEventEmitterPrototype(prototype: Object): void };
     _linkedBinding(name: 'electron_browser_global_shortcut'): { createGlobalShortcut(): Electron.GlobalShortcut };
     _linkedBinding(name: 'electron_browser_image_view'): { ImageView: any };
+    _linkedBinding(name: 'electron_browser_label_view'): { LabelView: typeof Electron.LabelView };
     _linkedBinding(name: 'electron_browser_in_app_purchase'): { inAppPurchase: Electron.InAppPurchase };
     _linkedBinding(name: 'electron_browser_message_port'): {
       createPair(): { port1: Electron.MessagePortMain; port2: Electron.MessagePortMain };

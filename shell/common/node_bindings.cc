@@ -62,6 +62,7 @@
 #define ELECTRON_BROWSER_BINDINGS(V)      \
   V(electron_browser_app)                 \
   V(electron_browser_auto_updater)        \
+  V(electron_browser_box_layout_view)     \
   V(electron_browser_content_tracing)     \
   V(electron_browser_crash_reporter)      \
   V(electron_browser_desktop_capturer)    \
@@ -70,6 +71,7 @@
   V(electron_browser_global_shortcut)     \
   V(electron_browser_image_view)          \
   V(electron_browser_in_app_purchase)     \
+  V(electron_browser_label_view)          \
   V(electron_browser_menu)                \
   V(electron_browser_message_port)        \
   V(electron_browser_msix_updater)        \
@@ -84,6 +86,7 @@
   V(electron_browser_service_worker_main) \
   V(electron_browser_session)             \
   V(electron_browser_screen)              \
+  V(electron_browser_scroll_view)         \
   V(electron_browser_system_preferences)  \
   V(electron_browser_base_window)         \
   V(electron_browser_tray)                \

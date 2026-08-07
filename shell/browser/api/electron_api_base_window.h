@@ -182,6 +182,9 @@ class BaseWindow : public gin_helper::TrackableObject<BaseWindow>,
   void SetDocumentEdited(bool edited);
   bool IsDocumentEdited() const;
   void SetIgnoreMouseEvents(bool ignore, gin::Arguments* args);
+  void SetCapture(gin_helper::Handle<View> view, gin::Arguments* args);
+  void ReleaseCapture();
+  void SizeToContents();
   void SetContentProtection(bool enable);
   bool IsContentProtected() const;
   void SetFocusable(bool focusable);
