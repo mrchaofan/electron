@@ -108,6 +108,7 @@ class ElectronBrowserContext;
 class InspectableWebContents;
 class WebContentsZoomController;
 class WebViewGuestDelegate;
+class UnownedWebContentsBridge;
 class NativeWindow;
 class OffScreenRenderWidgetHostView;
 class OffScreenWebContentsView;
@@ -142,6 +143,7 @@ class WebContents final : public ExclusiveAccessContext,
                       // kBrowserWindow.
     kRemote,          // Thin wrap around an existing WebContents.
     kWebView,         // Used by <webview>.
+    kWebView2,        // Independently owned; may be attached to an iframe.
     kOffScreen,       // Used for offscreen rendering
   };
 
@@ -325,6 +327,12 @@ class WebContents final : public ExclusiveAccessContext,
   void AttachToIframe(content::WebContents* embedder_web_contents,
                       std::string embedder_frame_token);
   void DetachFromOuterFrame();
+  bool IsAttached() const;
+  std::string Attach(content::RenderFrameHost* owner,
+                     std::string frame_token,
+                     gin_helper::ErrorThrower thrower);
+  bool Detach();
+  void OnUnownedDetached(std::string attachment_id);
 
   // Methods for offscreen rendering
   bool IsOffScreen() const;
@@ -395,7 +403,7 @@ class WebContents final : public ExclusiveAccessContext,
   bool EmitNavigationEvent(const std::string& event,
                            content::NavigationHandle* navigation_handle);
 
-  WebContents* embedder() { return embedder_; }
+  WebContents* embedder();
 
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
   extensions::ScriptExecutor* script_executor() {
@@ -965,6 +973,7 @@ class WebContents final : public ExclusiveAccessContext,
 
   // Declared after |inspectable_web_contents_| because it observes its views.
   std::unique_ptr<DraggableRegionDebugger> draggable_region_debugger_;
+  std::unique_ptr<UnownedWebContentsBridge> attachment_bridge_;
 
   base::WeakPtrFactory<WebContents> weak_factory_{this};
 };

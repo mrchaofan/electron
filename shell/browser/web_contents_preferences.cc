@@ -115,6 +115,7 @@ void WebContentsPreferences::Clear() {
   disable_html_fullscreen_window_resize_ = false;
   webview_tag_ = false;
   sandbox_ = std::nullopt;
+  webview2_tag_ = false;
   context_isolation_ = true;
   javascript_ = true;
   images_ = true;
@@ -172,6 +173,7 @@ void WebContentsPreferences::SetFromDictionary(
   web_preferences.Get(options::kDisableHtmlFullscreenWindowResize,
                       &disable_html_fullscreen_window_resize_);
   web_preferences.Get(options::kWebviewTag, &webview_tag_);
+  web_preferences.Get("webview2Tag", &webview2_tag_);
   bool sandbox;
   if (web_preferences.Get(options::kSandbox, &sandbox))
     sandbox_ = sandbox;
@@ -377,6 +379,7 @@ void WebContentsPreferences::SaveLastPreferences() {
   dict.Set(options::kContextIsolation, context_isolation_);
   dict.Set(options::kJavaScript, javascript_);
   dict.Set(options::kWebviewTag, webview_tag_);
+  dict.Set("webview2Tag", webview2_tag_);
   dict.Set("disablePopups", disable_popups_);
   dict.Set(options::kWebSecurity, web_security_);
   dict.Set(options::kAllowRunningInsecureContent,
@@ -485,6 +488,7 @@ void WebContentsPreferences::OverrideWebkitPrefs(
 
   prefs->enable_plugins = plugins_;
   prefs->webview_tag = webview_tag_;
+  prefs->webview2_tag = webview2_tag_;
 
   prefs->v8_cache_options = v8_cache_options_;
 

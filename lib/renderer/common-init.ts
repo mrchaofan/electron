@@ -32,7 +32,7 @@ switch (window.location.protocol) {
 // Load webview tag implementation.
 if (process.isMainFrame) {
   const { webViewInit } = require('@electron/internal/renderer/web-view/web-view-init') as typeof webViewInitModule;
-  webViewInit(webviewTag, isWebView);
+  webViewInit(webviewTag, isWebView, mainFrame.getWebPreference('webview2Tag'));
 }
 
 const { webFrameInit } = require('@electron/internal/renderer/web-frame-init') as typeof webFrameInitModule;

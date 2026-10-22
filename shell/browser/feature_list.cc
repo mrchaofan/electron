@@ -43,6 +43,8 @@ void InitializeFeatureList() {
       cmd_line->GetSwitchValueASCII(::switches::kEnableFeatures);
   auto disable_features =
       cmd_line->GetSwitchValueASCII(::switches::kDisableFeatures);
+  enable_features +=
+      std::string(",") + features::kAttachUnownedInnerWebContents.name;
   // Disable creation of spare renderer process with site-per-process mode,
   // it interferes with our process preference tracking for non sandboxed mode.
   // Can be reenabled when our site instance policy is aligned with chromium

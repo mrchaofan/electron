@@ -19,7 +19,22 @@ function handleFocusBlur() {
   });
 }
 
-export function webViewInit(webviewTag: boolean, isWebView: boolean) {
+export function webViewInit(webviewTag: boolean, isWebView: boolean, webview2Tag = false) {
+  if (webview2Tag && !isWebView) {
+    const webview2Internal =
+      require('@electron/internal/renderer/web-view/webview2-internal') as typeof import('./webview2-internal');
+    if (process.contextIsolated) {
+      v8Util.setHiddenValue(window, 'webview2Internal', webview2Internal);
+    } else {
+      const { setupWebView2 } =
+        require('@electron/internal/renderer/web-view/webview2-element') as typeof import('./webview2-element');
+      setupWebView2({
+        webview2Internal,
+        allowGuestViewElementDefinition: webFrame.allowGuestViewElementDefinition,
+        setIsWebView: (iframe) => v8Util.setHiddenValue(iframe, 'isWebView', true)
+      });
+    }
+  }
   // Don't allow recursive `<webview>`.
   if (webviewTag && !isWebView) {
     const guestViewInternal =

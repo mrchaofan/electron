@@ -129,6 +129,7 @@
 #include "shell/browser/ui/file_dialog.h"
 #include "shell/browser/ui/inspectable_web_contents.h"
 #include "shell/browser/ui/inspectable_web_contents_view.h"
+#include "shell/browser/unowned_web_contents_bridge.h"
 #include "shell/browser/web_contents_permission_helper.h"
 #include "shell/browser/web_contents_preferences.h"
 #include "shell/browser/web_contents_zoom_controller.h"
@@ -344,6 +345,9 @@ struct Converter<electron::api::WebContents::Type> {
       case Type::kRemote:
         type = "remote";
         break;
+      case Type::kWebView2:
+        type = "webview2";
+        break;
       case Type::kWebView:
         type = "webview";
         break;
@@ -366,6 +370,7 @@ struct Converter<electron::api::WebContents::Type> {
             {"browserView", Val::kBrowserView},
             {"offscreen", Val::kOffScreen},
             {"webview", Val::kWebView},
+            {"webview2", Val::kWebView2},
         });
     return FromV8WithLookup(isolate, val, Lookup, out);
   }
@@ -936,7 +941,8 @@ WebContents::WebContents(v8::Isolate* isolate,
   // Whether to enable DevTools.
   options.Get("devTools", &enable_devtools_);
 
-  const bool initially_shown = options.ValueOrDefault(options::kShow, true);
+  const bool initially_shown =
+      type_ != Type::kWebView2 && options.ValueOrDefault(options::kShow, true);
 
   // Obtain the session.
   std::string partition;
@@ -1159,11 +1165,16 @@ void WebContents::InitWithWebContents(
 
   // Create InspectableWebContents.
   inspectable_web_contents_ = std::make_unique<InspectableWebContents>(
-      std::move(web_contents), browser_context->prefs(), is_guest);
+      std::move(web_contents), browser_context->prefs(),
+      is_guest || type_ == Type::kWebView2);
   inspectable_web_contents_->SetDelegate(this);
 }
 
 WebContents::~WebContents() {
+  if (attachment_bridge_) {
+    attachment_bridge_->Detach();
+    attachment_bridge_.reset();
+  }
   // Release this instance's contribution to the process-wide caret browsing
   // refcount. Runs before any of the early returns below so a WebContents
   // destroyed with caret browsing on cannot leak a count and pin the platform
@@ -1633,9 +1644,10 @@ void WebContents::UpdateTargetURL(content::WebContents* source,
 bool WebContents::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
-  if (type_ == Type::kWebView && embedder_) {
+  if (auto* embedder = this->embedder();
+      (type_ == Type::kWebView || IsAttached()) && embedder) {
     // Send the unhandled keyboard events back to the embedder.
-    return embedder_->HandleKeyboardEvent(source, event);
+    return embedder->HandleKeyboardEvent(source, event);
   }
 
   // Let DevTools consume shortcuts it has registered for (e.g. F8 to pause)
@@ -3382,8 +3394,8 @@ void WebContents::OpenDevTools(gin::Arguments* args) {
     return;
 
   std::string state;
-  if (type_ == Type::kWebView || type_ == Type::kBackgroundPage ||
-      !owner_window()) {
+  if (type_ == Type::kWebView || type_ == Type::kWebView2 ||
+      type_ == Type::kBackgroundPage || !owner_window()) {
     state = "detach";
   }
 
@@ -3398,6 +3410,8 @@ void WebContents::OpenDevTools(gin::Arguments* args) {
     }
   }
 
+  if (type_ == Type::kWebView2)
+    state = "detach";
   DCHECK(inspectable_web_contents_);
   inspectable_web_contents_->SetDockState(state);
   inspectable_web_contents_->SetDevToolsTitle(base::UTF8ToUTF16(title));
@@ -3983,7 +3997,7 @@ void WebContents::Focus() {
 
   // WebView uses WebContentsViewChildFrame, which doesn't have a Focus impl
   // and triggers a fatal NOTREACHED.
-  if (is_guest())
+  if (is_guest() || IsAttached())
     return;
 
   web_contents()->Focus();
@@ -3995,7 +4009,7 @@ bool WebContents::IsFocused() const {
   if (!view)
     return false;
 
-  if (type() != Type::kBackgroundPage) {
+  if (type() != Type::kBackgroundPage && !IsAttached()) {
     auto* window = web_contents()->GetNativeView()->GetToplevelWindow();
     if (window && !window->IsVisible())
       return false;
@@ -4184,6 +4198,50 @@ void WebContents::OnCursorChanged(const ui::Cursor& cursor) {
   } else {
     Emit("cursor-changed", CursorTypeToString(cursor.type()));
   }
+}
+
+bool WebContents::IsAttached() const {
+  return attachment_bridge_ && attachment_bridge_->IsAttached();
+}
+
+std::string WebContents::Attach(content::RenderFrameHost* owner,
+                                std::string frame_token,
+                                gin_helper::ErrorThrower thrower) {
+  if (!attachment_bridge_ || !web_contents()) {
+    thrower.ThrowError("WebContents is not webview2");
+    return {};
+  }
+  std::string error;
+  auto id = attachment_bridge_->Attach(owner, frame_token, &error);
+  if (!error.empty())
+    thrower.ThrowError(error);
+  if (!id.empty()) {
+    auto* outer = web_contents()->GetOuterWebContents();
+    auto* relay = NativeWindowRelay::FromWebContents(outer);
+    SetOwnerWindow(relay ? relay->GetNativeWindow() : nullptr);
+    web_contents()->WasShown();
+  }
+  return id;
+}
+
+bool WebContents::Detach() {
+  if (IsAttached() && is_html_fullscreen() && owner_window())
+    ExitFullscreenModeForTab(web_contents());
+  return attachment_bridge_ && attachment_bridge_->Detach();
+}
+
+void WebContents::OnUnownedDetached(std::string attachment_id) {
+  if (web_contents() && !web_contents()->IsBeingDestroyed()) {
+    SetOwnerWindow(nullptr);
+    web_contents()->WasHidden();
+  }
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<WebContents> contents, std::string id) {
+                       if (contents && contents->web_contents())
+                         contents->Emit("-webview2-detached", id);
+                     },
+                     GetWeakPtr(), std::move(attachment_id)));
 }
 
 void WebContents::AttachToIframe(content::WebContents* embedder_web_contents,
@@ -4525,7 +4583,7 @@ WebContents::ResyncFocusAfterDialog(DialogClosedCallback callback) {
 
 #if defined(USE_AURA)
 void WebContents::ResyncViewFocus() {
-  if (is_guest() || !web_contents())
+  if (is_guest() || IsAttached() || !web_contents())
     return;
   auto* rwhv = web_contents()->GetRenderWidgetHostView();
   if (!rwhv || !rwhv->HasFocus())
@@ -4716,7 +4774,7 @@ void WebContents::ExitPictureInPicture() {
 bool WebContents::ShouldFocusPageAfterCrash(content::WebContents* source) {
   // WebView uses WebContentsViewChildFrame, which doesn't have a Focus impl
   // and triggers a fatal NOTREACHED.
-  if (is_guest())
+  if (is_guest() || IsAttached())
     return false;
   return true;
 }
@@ -5145,6 +5203,9 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod("beginFrameSubscription", &WebContents::BeginFrameSubscription)
       .SetMethod("endFrameSubscription", &WebContents::EndFrameSubscription)
       .SetMethod("startDrag", &WebContents::StartDrag)
+      .SetMethod("isAttached", &WebContents::IsAttached)
+      .SetMethod("attach", &WebContents::Attach)
+      .SetMethod("detach", &WebContents::Detach)
       .SetMethod("attachToIframe", &WebContents::AttachToIframe)
       .SetMethod("detachFromOuterFrame", &WebContents::DetachFromOuterFrame)
       .SetMethod("isOffscreen", &WebContents::IsOffScreen)
@@ -5228,6 +5289,13 @@ gin_helper::Handle<WebContents> WebContents::New(
     const gin_helper::Dictionary& options) {
   gin_helper::Handle<WebContents> handle =
       gin_helper::CreateHandle(isolate, new WebContents(isolate, options));
+  if (handle->type() == Type::kWebView2) {
+    handle->Pin(isolate);
+    handle->attachment_bridge_ = std::make_unique<UnownedWebContentsBridge>(
+        handle->web_contents(),
+        base::BindRepeating(&WebContents::OnUnownedDetached,
+                            handle->GetWeakPtr()));
+  }
   v8::TryCatch try_catch(isolate);
   gin_helper::CallMethod(isolate, handle.get(), "_init");
   if (try_catch.HasCaught()) {
@@ -5243,12 +5311,25 @@ gin_helper::Handle<WebContents> WebContents::CreateAndTake(
     Type type) {
   gin_helper::Handle<WebContents> handle = gin_helper::CreateHandle(
       isolate, new WebContents(isolate, std::move(web_contents), type));
+  if (handle->type() == Type::kWebView2) {
+    handle->Pin(isolate);
+    handle->attachment_bridge_ = std::make_unique<UnownedWebContentsBridge>(
+        handle->web_contents(),
+        base::BindRepeating(&WebContents::OnUnownedDetached,
+                            handle->GetWeakPtr()));
+  }
   v8::TryCatch try_catch(isolate);
   gin_helper::CallMethod(isolate, handle.get(), "_init");
   if (try_catch.HasCaught()) {
     node::errors::TriggerUncaughtException(isolate, try_catch);
   }
   return handle;
+}
+
+WebContents* WebContents::embedder() {
+  if (type_ == Type::kWebView2 && web_contents())
+    return From(web_contents()->GetOuterWebContents());
+  return embedder_;
 }
 
 // static

@@ -112,6 +112,7 @@ class WebContentsPreferences
   bool disable_html_fullscreen_window_resize_;
   bool webview_tag_;
   std::optional<bool> sandbox_;
+  bool webview2_tag_;
   bool context_isolation_;
   bool javascript_;
   bool images_;
