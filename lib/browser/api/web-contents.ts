@@ -6,6 +6,7 @@ import {
 import { IpcMainImpl } from '@electron/internal/browser/ipc-main-impl';
 import { parseFeatures } from '@electron/internal/browser/parse-features-string';
 import * as deprecate from '@electron/internal/common/deprecate';
+import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
 
 import { app, webFrameMain, dialog } from 'electron/main';
 import type { BrowserWindowConstructorOptions, MessageBoxOptions, NavigationEntry } from 'electron/main';
@@ -205,6 +206,11 @@ const consoleMessageDeprecated = deprecate.warnOnceMessage(
 // Add JavaScript wrappers for WebContents class.
 WebContents.prototype._init = function () {
   this._windowOpenHandler = null;
+
+  // Emitted by the native bridge when a webview2 attachment in this host ends.
+  this.on('-webview2-detached' as any, (_event: Electron.Event, attachmentId: string) => {
+    this._sendInternal(IPC_MESSAGES.WEBVIEW2_DETACHED, attachmentId);
+  });
 
   const ipc = new IpcMainImpl();
   Object.defineProperty(this, 'ipc', {

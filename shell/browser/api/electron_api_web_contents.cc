@@ -5413,24 +5413,33 @@ std::string WebContents::Attach(content::RenderFrameHost* owner,
   return id;
 }
 
-bool WebContents::Detach() {
+bool WebContents::Detach(std::optional<std::string> attachment_id) {
+  if (!attachment_bridge_ ||
+      (attachment_id && *attachment_id != attachment_bridge_->attachment_id()))
+    return false;
   if (IsAttached() && is_html_fullscreen() && owner_window())
     ExitFullscreenModeForTab(web_contents());
-  return attachment_bridge_ && attachment_bridge_->Detach();
+  return attachment_bridge_->Detach();
 }
 
-void WebContents::OnUnownedDetached(std::string attachment_id) {
+void WebContents::OnUnownedDetached(content::WebContents* outer,
+                                    std::string attachment_id) {
   if (web_contents() && !web_contents()->IsBeingDestroyed()) {
     SetOwnerWindow(nullptr);
     web_contents()->WasHidden();
   }
+  // Notify the host rather than this contents, which may be destroyed.
+  auto* embedder = From(outer);
+  if (!embedder)
+    return;
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(
-                     [](WebContents* contents, std::string id) {
-                       if (contents && !contents->IsDestroyed())
-                         contents->Emit("-webview2-detached", id);
+                     [](WebContents* embedder, std::string id) {
+                       if (embedder && !embedder->IsDestroyed() &&
+                           embedder->web_contents())
+                         embedder->Emit("-webview2-detached", id);
                      },
-                     WeakRef(), std::move(attachment_id)));
+                     embedder->WeakRef(), std::move(attachment_id)));
 }
 
 void WebContents::AttachToIframe(content::WebContents* embedder_web_contents,

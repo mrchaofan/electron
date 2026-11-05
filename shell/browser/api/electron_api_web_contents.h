@@ -355,8 +355,9 @@ class WebContents final : public gin::Wrappable<WebContents>,
   std::string Attach(content::RenderFrameHost* owner,
                      std::string frame_token,
                      gin_helper::ErrorThrower thrower);
-  bool Detach();
-  void OnUnownedDetached(std::string attachment_id);
+  bool Detach(std::optional<std::string> attachment_id);
+  void OnUnownedDetached(content::WebContents* outer,
+                         std::string attachment_id);
 
   // Methods for offscreen rendering
   bool IsOffScreen() const;
