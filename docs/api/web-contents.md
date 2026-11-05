@@ -2376,15 +2376,20 @@ Returns `boolean` - Whether a webview2 WebContents is currently embedded.
 
 Returns `string` - The unique attachment ID. Attaches synchronously to a fresh,
 empty local iframe in the same SiteInstance as its parent. The host must enable
-`webview2Tag` and use the same session as the contents. Throws if the target is
-invalid, busy, navigated, or the contents is already attached. The `webview2`
-bridge reads the token and calls this method through synchronous IPC.
+`webview2Tag`. The contents retain their own session, which may differ from the
+host's session. Throws if the target is invalid, busy, navigated, or the contents
+is already attached. The `webview2` bridge reads the token and calls this method
+through synchronous IPC.
 
-#### `contents.detach()`
+#### `contents.detach([attachmentId])`
+
+* `attachmentId` string (optional) - Only detach this attachment.
 
 Returns `boolean` - Whether an existing attachment was removed.
 
 Detaches the contents synchronously without closing it. Repeated calls are safe.
+When `attachmentId` is given and no longer matches the current attachment,
+nothing happens.
 Use a new empty iframe and read its LocalFrameToken for the next attachment.
 Applies to contents created with `webContents.create({ type: 'webview2' })`.
 

@@ -545,6 +545,11 @@ WebContents.prototype._init = function () {
 
   this._windowOpenHandler = null;
 
+  // Emitted by the native bridge when a webview2 attachment in this host ends.
+  this.on('-webview2-detached' as any, (_event: Electron.Event, attachmentId: string) => {
+    this._sendInternal(IPC_MESSAGES.WEBVIEW2_DETACHED, attachmentId);
+  });
+
   const ipc = new IpcMainImpl();
   Object.defineProperty(this, 'ipc', {
     get() {

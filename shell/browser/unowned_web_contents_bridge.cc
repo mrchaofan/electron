@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/unguessable_token.h"
 #include "content/browser/renderer_host/frame_tree_node.h"         // nogncheck
 #include "content/browser/renderer_host/render_frame_host_impl.h"  // nogncheck
@@ -33,7 +34,7 @@ bool ValidFrame(content::RenderFrameHost* frame,
 
 UnownedWebContentsBridge::UnownedWebContentsBridge(
     content::WebContents* inner,
-    base::RepeatingCallback<void(std::string)> detached)
+    DetachedCallback detached)
     : inner_(inner->GetWeakPtr()), detached_(std::move(detached)) {}
 
 UnownedWebContentsBridge::~UnownedWebContentsBridge() {
@@ -77,7 +78,6 @@ std::string UnownedWebContentsBridge::Attach(content::RenderFrameHost* owner,
           ->render_manager()
           ->is_attaching_inner_delegate() ||
       !outer || outer->IsBeingDestroyed() || outer == inner_.get() ||
-      outer->GetBrowserContext() != inner_->GetBrowserContext() ||
       !outer->GetOrCreateWebPreferences().webview2_tag) {
     *error = "Attachment requires a fresh, empty local iframe in the host";
     return {};
@@ -91,6 +91,7 @@ std::string UnownedWebContentsBridge::Attach(content::RenderFrameHost* owner,
   }
   attachment_id_ = base::UnguessableToken::Create().ToString();
   outer_ = outer->GetWeakPtr();
+  owner_id_ = owner->GetGlobalId();
   Observe(outer);
   outer->AttachUnownedInnerWebContents(
       content::UnownedInnerWebContentsClient::GetPassKey(), inner_.get(),
@@ -98,9 +99,10 @@ std::string UnownedWebContentsBridge::Attach(content::RenderFrameHost* owner,
   return attachment_id_;
 }
 
-bool UnownedWebContentsBridge::Detach() {
+bool UnownedWebContentsBridge::Detach(const std::string& attachment_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!IsAttached())
+  if (!IsAttached() ||
+      (!attachment_id.empty() && attachment_id != attachment_id_))
     return false;
   outer_->DetachUnownedInnerWebContents(
       content::UnownedInnerWebContentsClient::GetPassKey(), inner_.get());
@@ -109,16 +111,34 @@ bool UnownedWebContentsBridge::Detach() {
 
 void UnownedWebContentsBridge::UnownedInnerWebContentsDetached(
     content::WebContents* inner) {
-  if (inner == inner_.get())
-    CompleteDetach();
+  if (inner != inner_.get())
+    return;
+  auto* outer = outer_.get();
+  CompleteDetach(outer && !outer->IsBeingDestroyed() ? outer : nullptr);
 }
 
-void UnownedWebContentsBridge::CompleteDetach() {
+void UnownedWebContentsBridge::RenderFrameHostStateChanged(
+    content::RenderFrameHost* frame,
+    content::RenderFrameHost::LifecycleState old_state,
+    content::RenderFrameHost::LifecycleState new_state) {
+  // The owner document left the page (back-forward cache or pending deletion)
+  // while its iframe still exists. Detach outside the lifecycle transition.
+  if (frame->GetGlobalId() != owner_id_ ||
+      new_state == content::RenderFrameHost::LifecycleState::kActive)
+    return;
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(base::IgnoreResult(&UnownedWebContentsBridge::Detach),
+                     weak_factory_.GetWeakPtr(), attachment_id_));
+}
+
+void UnownedWebContentsBridge::CompleteDetach(content::WebContents* outer) {
   auto id = std::exchange(attachment_id_, {});
   outer_.reset();
+  owner_id_ = {};
   Observe(nullptr);
   if (!id.empty())
-    detached_.Run(std::move(id));
+    detached_.Run(outer, std::move(id));
 }
 
 void UnownedWebContentsBridge::PrimaryMainFrameRenderProcessGone(
@@ -128,6 +148,6 @@ void UnownedWebContentsBridge::PrimaryMainFrameRenderProcessGone(
 
 void UnownedWebContentsBridge::WebContentsDestroyed() {
   // Normally FrameTreeNode teardown already delivered the complete detach.
-  CompleteDetach();
+  CompleteDetach(nullptr);
 }
 }  // namespace electron

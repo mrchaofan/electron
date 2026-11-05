@@ -6,17 +6,22 @@ export interface Receipt {
   webContentsId: number;
   attachmentId: string;
 }
-export function attach(iframe: HTMLIFrameElement, slot: string, id: number): Receipt {
+export interface AttachmentError {
+  webContentsId: number | null;
+  code: 'invalid-id' | 'attach-failed';
+  message: string;
+}
+export function attach(iframe: HTMLIFrameElement, id: number): Receipt {
   const frame = mainFrame._findFrameByWindow(iframe.contentWindow!);
   if (!frame) throw new Error('Invalid webview2 iframe');
-  return invokeSync(IPC_MESSAGES.WEBVIEW2_ATTACH, slot, id, frame.frameToken);
+  const attachmentId: string = invokeSync(IPC_MESSAGES.WEBVIEW2_ATTACH, id, frame.frameToken);
+  return { webContentsId: id, attachmentId };
 }
-export function release(slot: string): Receipt | null {
-  return invokeSync(IPC_MESSAGES.WEBVIEW2_RELEASE, slot);
+export function release(receipt: Receipt) {
+  invokeSync(IPC_MESSAGES.WEBVIEW2_RELEASE, receipt.webContentsId, receipt.attachmentId);
 }
-export function subscribe(callback: (slot: string, receipt: Receipt) => void) {
-  const listener = (_event: Electron.IpcRendererEvent, slot: string, id: number, attachmentId: string) =>
-    callback(slot, { webContentsId: id, attachmentId });
+export function subscribe(callback: (attachmentId: string) => void) {
+  const listener = (_event: Electron.IpcRendererEvent, attachmentId: string) => callback(attachmentId);
   ipcRendererInternal.on(IPC_MESSAGES.WEBVIEW2_DETACHED, listener);
   return () => ipcRendererInternal.removeListener(IPC_MESSAGES.WEBVIEW2_DETACHED, listener);
 }

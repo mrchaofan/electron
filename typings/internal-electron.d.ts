@@ -140,7 +140,7 @@ declare namespace Electron {
     destroy(): void;
     isAttached(): boolean;
     attach(owner: Electron.WebFrameMain, frameToken: string): string;
-    detach(): boolean;
+    detach(attachmentId?: string): boolean;
     // <webview>
     attachToIframe(embedderWebContents: Electron.WebContents, embedderFrameToken: string): void;
     detachFromOuterFrame(): void;
