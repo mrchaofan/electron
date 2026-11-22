@@ -2381,6 +2381,125 @@ host's session. Throws if the target is invalid, busy, navigated, or the content
 is already attached. The `webview2` bridge reads the token and calls this method
 through synchronous IPC.
 
+Applications using [`<webview2>`](webview2-tag.md) normally let the tag perform
+attachment by setting its `web-contents-id` attribute. The following examples
+show direct attachment and how to manage focus and debugger input afterwards.
+
+**Attaching an independently owned page**
+
+In the main process, after `app.whenReady()`:
+
+```js
+const { BrowserWindow, webContents } = require('electron')
+
+const host = new BrowserWindow({ webPreferences: { webview2Tag: true } })
+await host.loadURL('data:text/html,<input id="hostEditor"><iframe id="guestFrame" name="guest"></iframe>')
+
+const contents = webContents.create({ type: 'webview2' })
+// Loading and attachment are independent. Await loading before operating on the page.
+await contents.loadURL('data:text/html,<input id="editor">')
+
+const owner = host.webContents.mainFrame
+const target = owner.frames.find(frame => frame.name === 'guest')
+if (!target) throw new Error('Target iframe is not available')
+
+const attachmentId = contents.attach(owner, target.frameToken)
+console.log(contents.isAttached()) // true
+```
+
+Read the token immediately before attachment. Do not navigate the empty iframe
+or reuse a token from an earlier host document. For a nested iframe, `owner`
+must be that iframe's parent frame. The returned ID identifies the attachment;
+it does not mean the guest document is ready. Observe content events such as
+`dom-ready`, `did-fail-load` and `render-process-gone` on `contents` in the main
+process. Here, awaiting `loadURL()` makes the guest ready before attaching it.
+
+**Giving the embedded page user focus**
+
+Attachment does not transfer the user's keyboard focus. When the user selects
+the embedded page, focus its embedding element in the host renderer. For the
+raw iframe above, this can be requested from the main process:
+
+```js
+await host.webContents.executeJavaScript(
+  'document.getElementById("guestFrame").contentWindow.focus()'
+)
+```
+
+When using `<webview2>`, call the tag's `focus()` instead. For example, in the
+host renderer, keep both tags attached while switching their display:
+
+```js
+function selectTab(selectedView) {
+  for (const view of document.querySelectorAll('webview2')) {
+    view.style.display = view === selectedView ? 'flex' : 'none'
+  }
+  selectedView.focus()
+}
+```
+
+This follows normal user focus transfer. The previous page can retain its
+editable element and selection. `contents.focus()` does not focus an attached
+guest; use the embedding iframe or tag. For delayed automatic focus requests,
+check the host's current editor focus again before transferring it.
+
+**Sending debugger input without taking host focus**
+
+On Windows and macOS, debugger input is isolated only when `contents` is an
+attached inner WebContents and the issuing session has effective page focus
+emulation enabled. Use the guest's debugger. The isolated commands are ordinary
+mouse movement and left-button sequences, `Input.dispatchKeyEvent`,
+`Input.insertText` and `Input.imeSetComposition`.
+
+These commands keep their native input handling, focus changes and unhandled
+fallback within the guest. They do not transfer the host's real keyboard or
+system IME ownership. Without focus emulation, debugger commands follow their
+existing behavior. Wheel input, other mouse buttons, mouse-to-touch emulation,
+touch, synthetic gestures and explicit drag commands also keep their existing
+behavior, including possible host focus transfer. Ordinary user input and
+`sendInputEvent` are unaffected.
+
+Page focus emulation does not select an editable element. Select the guest input
+before the user starts editing the host, then enable emulation for the isolated
+operation:
+
+```js
+const dbg = contents.debugger
+if (!dbg.isAttached()) dbg.attach('1.3')
+await contents.executeJavaScript('document.getElementById("editor").focus()')
+
+await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+try {
+  for (const type of ['rawKeyDown', 'keyUp']) {
+    await dbg.sendCommand('Input.dispatchKeyEvent', {
+      type,
+      key: 'F2',
+      code: 'F2',
+      windowsVirtualKeyCode: 113
+    })
+  }
+  await dbg.sendCommand('Input.insertText', { text: 'Agent input' })
+} finally {
+  await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false })
+}
+```
+
+While isolation is active, a page session follows the guest's own focused frame,
+including an OOPIF; when none is focused, it uses the valid guest main frame.
+An explicit frame session uses that frame's widget. Invalid or out-of-scope
+input targets fail instead of falling back to the host. Isolated Tab / Shift+Tab
+traversal stays within local frames and never hands focus to the host;
+cross-process Tab traversal is currently unsupported. Page script focus calls
+remain independent of this native input contract.
+
+For tab switching, retain the contents and embedding element. If attachment
+must end, use `contents.detach(attachmentId)` so a stale release cannot detach a
+new attachment. Create a fresh empty iframe and read a new token to reattach.
+Keyboard targets are resolved and checked at dispatch. An inactive target fails
+instead of redirecting input to the host; existing IPC and debugger callbacks
+retain their original behavior. Destroy the
+independent contents explicitly when they are no longer needed.
+
 #### `contents.detach([attachmentId])`
 
 * `attachmentId` string (optional) - Only detach this attachment.

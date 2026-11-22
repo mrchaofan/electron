@@ -1,0 +1,1137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron contributors <electron@github.com>
+Subject: fix: isolate directed debugger input in embedded WebContents on Windows and macOS
+
+Keep ordinary mouse, keyboard, text and composition inside the embedded
+WebContents while its debugger session emulates focus. Preserve existing
+input handling for all other commands and ordinary user input.
+
+diff --git a/components/input/render_input_router.cc b/components/input/render_input_router.cc
+index 5862d515c8..beb9a7fb5e 100644
+--- a/components/input/render_input_router.cc
++++ b/components/input/render_input_router.cc
+@@ -63,6 +63,7 @@ class UnboundWidgetInputHandler : public blink::mojom::WidgetInputHandler {
+                          int32_t start,
+                          int32_t end,
+                          blink::mojom::ImeState ime_state,
++                         bool allow_unfocused,
+                          ImeSetCompositionCallback callback) override {
+     DLOG(WARNING) << "Input request on unbound interface";
+   }
+@@ -70,6 +71,7 @@ class UnboundWidgetInputHandler : public blink::mojom::WidgetInputHandler {
+                      const std::vector<ui::ImeTextSpan>& ime_text_spans,
+                      const gfx::Range& range,
+                      int32_t relative_cursor_position,
++                     bool allow_unfocused,
+                      ImeCommitTextCallback callback) override {
+     DLOG(WARNING) << "Input request on unbound interface";
+   }
+diff --git a/content/browser/devtools/protocol/emulation_handler.h b/content/browser/devtools/protocol/emulation_handler.h
+index 069f55babd..e9e00a927b 100644
+--- a/content/browser/devtools/protocol/emulation_handler.h
++++ b/content/browser/devtools/protocol/emulation_handler.h
+@@ -121,6 +121,7 @@ class EmulationHandler : public DevToolsDomainHandler,
+   Response SetVisibleSize(int width, int height) override;
+
+   Response SetFocusEmulationEnabled(bool) override;
++  bool focus_emulation_enabled() const { return focus_emulation_enabled_; }
+
+   Response SetEmulatedMedia(
+       std::optional<std::string> media,
+diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
+index 11dab515d6..2c09246fce 100644
+--- a/content/browser/devtools/protocol/input_handler.cc
++++ b/content/browser/devtools/protocol/input_handler.cc
+@@ -23,11 +23,15 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/types/expected.h"
++#include "build/build_config.h"
+ #include "components/input/render_widget_host_input_event_router.h"
+ #include "content/browser/devtools/devtools_agent_host_impl.h"
++#include "content/browser/devtools/devtools_session.h"
++#include "content/browser/devtools/protocol/emulation_handler.h"
+ #include "content/browser/devtools/protocol/native_input_event_builder.h"
+ #include "content/browser/devtools/protocol/protocol.h"
+ #include "content/browser/renderer_host/data_transfer_util.h"
++#include "content/browser/renderer_host/frame_tree.h"
+ #include "content/browser/renderer_host/input/touch_emulator_impl.h"
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+@@ -738,12 +742,22 @@ class InputHandler::InputInjector
+       return;
+     }
+
+-    if (owner_->drag_controller_.HandleMouseEvent(*widget_host_, mouse_event,
++    const bool isolate_focus =
++        mouse_event.GetModifiers() & blink::WebInputEvent::kDebuggerFocusIsolation;
++    if (!isolate_focus &&
++        owner_->drag_controller_.HandleMouseEvent(*widget_host_, mouse_event,
+                                                   callback)) {
+       return;
+     }
+
+-    widget_host_->Focus();
++    if (!isolate_focus) {
++      auto self = weak_ptr_factory_.GetWeakPtr();
++      widget_host_->Focus();
++      if (!self || !widget_host_) {
++        callback->sendFailure(Response::InternalError());
++        return;
++      }
++    }
+     input_queued_ = false;
+     pending_mouse_callbacks_.push_back(std::move(callback));
+     // This may destroy the injector if the events get discarded.
+@@ -768,7 +782,10 @@ class InputHandler::InputInjector
+       return;
+     }
+
+-    widget_host_->Focus();
++    if (!(keyboard_event.GetModifiers() &
++          blink::WebInputEvent::kDebuggerFocusIsolation)) {
++      widget_host_->Focus();
++    }
+     input_queued_ = false;
+     pending_key_callbacks_.push_back(std::move(callback));
+     ui::LatencyInfo latency;
+@@ -853,7 +870,8 @@ class InputHandler::InputInjector
+       //
+       // Note this also applies to the mouse move that triggers the drag, so
+       // HandleMouseEvent has special logic to handle this specific case.
+-      if (!widget_host_ ||
++      if ((event.GetModifiers() & blink::WebInputEvent::kDebuggerFocusIsolation) ||
++          !widget_host_ ||
+           !owner_->drag_controller_.HandleMouseEvent(
+               *widget_host_, static_cast<const blink::WebMouseEvent&>(event),
+               callback)) {
+@@ -1178,6 +1196,71 @@ Response InputHandler::Disable() {
+   return Response::Success();
+ }
+
++bool InputHandler::ShouldIsolateDebuggerInput() {
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
++  if (!web_contents_ || !web_contents_->GetOuterWebContents())
++    return false;
++
++  auto enabled = [](DevToolsSession* session) {
++    if (!session) {
++      return false;
++    }
++    auto it = session->handlers().find(Emulation::Metainfo::domainName);
++    return it != session->handlers().end() &&
++           static_cast<EmulationHandler*>(it->second.get())
++               ->focus_emulation_enabled();
++  };
++  if (enabled(session())) {
++    return true;
++  }
++  auto* root = session() ? session()->GetRootSession() : nullptr;
++  return root && root != session() && root->GetAgentHost() &&
++         root->GetAgentHost()->GetWebContents() == web_contents_ &&
++         enabled(root);
++#else
++  return false;
++#endif
++}
++
++// Debugger keyboard commands address their own page/frame, independently of
++// the embedding root's real keyboard focus. Frame focus stays inside this tree.
++RenderWidgetHostImpl* InputHandler::ResolveKeyboardWidget(
++    bool isolate_focus, bool include_child_frame_focus) {
++  if (!isolate_focus) {
++    auto* widget = host_->GetRenderWidgetHost();
++    if ((include_child_frame_focus || !host_->GetParent()) && widget->delegate()) {
++      if (auto* focused = widget->delegate()->GetFocusedRenderWidgetHost(widget))
++        return focused;
++    }
++    return widget;
++  }
++
++  if (!host_ || !host_->IsActive() || !host_->IsRenderFrameLive()) {
++    return nullptr;
++  }
++
++  auto* frame = host_.get();
++  if (!frame->GetParent()) {
++    auto* node = web_contents_->GetPrimaryFrameTree().GetFocusedFrame();
++    frame = node ? node->current_frame_host()
++                 : web_contents_->GetPrimaryMainFrame();
++  }
++  if (!frame->IsActive() || !frame->IsRenderFrameLive())
++    return nullptr;
++
++  auto self = weak_factory_.GetWeakPtr();
++  auto session_frame = host_->GetWeakPtr();
++  auto target = frame->GetWeakPtr();
++  const auto document = frame->GetDocumentToken();
++  frame->frame_tree()->SetFocusedFrame(frame->frame_tree_node(), nullptr);
++  if (!self || self->host_ != session_frame.get() || !target ||
++      !target->IsActive() || !target->IsRenderFrameLive() ||
++      target->GetDocumentToken() != document) {
++    return nullptr;
++  }
++  return target->GetRenderWidgetHost();
++}
++
+ void InputHandler::DispatchKeyEvent(
+     const std::string& type,
+     std::optional<int> modifiers,
+@@ -1254,20 +1337,24 @@ void InputHandler::DispatchKeyEvent(
+     return;
+   }
+
+-  RenderWidgetHostImpl* widget_host = host_->GetRenderWidgetHost();
+-  if (!host_->GetParent() && widget_host->delegate()) {
+-    RenderWidgetHostImpl* target_host =
+-        widget_host->delegate()->GetFocusedRenderWidgetHost(widget_host);
+-    if (target_host)
+-      widget_host = target_host;
++  const bool isolate_focus = ShouldIsolateDebuggerInput();
++  RenderWidgetHostImpl* widget_host =
++      ResolveKeyboardWidget(isolate_focus, /*include_child_frame_focus=*/false);
++  if (!widget_host) {
++    callback->sendFailure(
++        Response::ServerError("Input target is no longer active"));
++    return;
+   }
+
+-  // We do not pass events to browser if there is no native key event
+-  // due to Mac needing the actual os_event.
+-  if (event.native_key_code && allow_sending_input_to_browser_)
++  if (isolate_focus) {
++    event.SetModifiers(event.GetModifiers() |
++                       blink::WebInputEvent::kDebuggerFocusIsolation);
++    event.skip_if_unhandled = true;
++  } else if (event.native_key_code && allow_sending_input_to_browser_) {
+     event.os_event = NativeInputEventBuilder::CreateEvent(event);
+-  else
++  } else {
+     event.skip_if_unhandled = true;
++  }
+
+   EnsureInjector(widget_host)
+       ->InjectKeyboardEvent(event, std::move(commands), std::move(callback));
+@@ -1281,21 +1368,23 @@ void InputHandler::InsertText(const std::string& text,
+     return;
+   }
+
+-  RenderWidgetHostImpl* widget_host = host_->GetRenderWidgetHost();
+-  if (!host_->GetParent() && widget_host->delegate()) {
+-    RenderWidgetHostImpl* target_host =
+-        widget_host->delegate()->GetFocusedRenderWidgetHost(widget_host);
+-    if (target_host)
+-      widget_host = target_host;
++  const bool isolate_focus = ShouldIsolateDebuggerInput();
++  RenderWidgetHostImpl* widget_host =
++      ResolveKeyboardWidget(isolate_focus, /*include_child_frame_focus=*/false);
++  if (!widget_host) {
++    callback->sendFailure(
++        Response::ServerError("Input target is no longer active"));
++    return;
+   }
+
+   base::OnceClosure closure =
+       base::BindOnce(&InsertTextCallback::sendSuccess, std::move(callback));
+
+-  widget_host->Focus();
++  if (!isolate_focus)
++    widget_host->Focus();
+   widget_host->GetWidgetInputHandler()->ImeCommitText(
+       text16, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0,
+-      std::move(closure));
++      /*allow_unfocused=*/isolate_focus, std::move(closure));
+ }
+
+ void InputHandler::ImeSetComposition(
+@@ -1318,12 +1407,13 @@ void InputHandler::ImeSetComposition(
+
+   // |RenderFrameHostImpl::GetRenderWidgetHost| returns the RWHImpl of the
+   // nearest local root of |host_|.
+-  RenderWidgetHostImpl* widget_host = host_->GetRenderWidgetHost();
+-  if (widget_host->delegate()) {
+-    RenderWidgetHostImpl* target_host =
+-        widget_host->delegate()->GetFocusedRenderWidgetHost(widget_host);
+-    if (target_host)
+-      widget_host = target_host;
++  const bool isolate_focus = ShouldIsolateDebuggerInput();
++  RenderWidgetHostImpl* widget_host =
++      ResolveKeyboardWidget(isolate_focus, /*include_child_frame_focus=*/true);
++  if (!widget_host) {
++    callback->sendFailure(
++        Response::ServerError("Input target is no longer active"));
++    return;
+   }
+
+   // If replacement start and end are not specified, then the range is invalid,
+@@ -1345,12 +1435,12 @@ void InputHandler::ImeSetComposition(
+   base::OnceClosure closure = base::BindOnce(
+       &ImeSetCompositionCallback::sendSuccess, std::move(callback));
+
+-  widget_host->Focus();
+-
++  if (!isolate_focus)
++    widget_host->Focus();
+   widget_host->GetWidgetInputHandler()->ImeSetComposition(
+       text16, std::vector<ui::ImeTextSpan>(), replacement_range,
+       selection_start, selection_end, blink::mojom::ImeState::kNone,
+-      std::move(closure));
++      /*allow_unfocused=*/isolate_focus, std::move(closure));
+ }
+
+ void InputHandler::DispatchMouseEvent(
+@@ -1384,7 +1474,28 @@ void InputHandler::DispatchMouseEvent(
+     return;
+   }
+
+-  HandleMouseEvent(std::move(maybe_event).value(), std::move(callback));
++  auto event = std::move(maybe_event).value();
++  const auto event_button = event->button;
++  const auto type = event->GetType();
++  const bool ordinary_mouse =
++      event->pointer_type == blink::WebPointerProperties::PointerType::kMouse &&
++      (event_button == blink::WebMouseEvent::Button::kLeft ||
++       (type == blink::WebInputEvent::Type::kMouseMove &&
++        event_button == blink::WebMouseEvent::Button::kNoButton)) &&
++      type != blink::WebInputEvent::Type::kMouseWheel &&
++      !(event->GetModifiers() & (blink::WebInputEvent::kMiddleButtonDown |
++                                 blink::WebInputEvent::kRightButtonDown |
++                                 blink::WebInputEvent::kBackButtonDown |
++                                 blink::WebInputEvent::kForwardButtonDown));
++  if (ordinary_mouse && ShouldIsolateDebuggerInput() && host_) {
++    auto* emulator = host_->GetRenderWidgetHost()->GetTouchEmulator(
++        /*create_if_necessary=*/false);
++    if (!emulator || !emulator->IsEmulatingTouchFromMouse()) {
++      event->SetModifiers(event->GetModifiers() |
++                          blink::WebInputEvent::kDebuggerFocusIsolation);
++    }
++  }
++  HandleMouseEvent(std::move(event), std::move(callback));
+ }
+
+ void InputHandler::HandleMouseEvent(
+@@ -1402,6 +1513,63 @@ void InputHandler::HandleMouseEvent(
+     return;
+   }
+
++  if (event->GetModifiers() & blink::WebInputEvent::kDebuggerFocusIsolation) {
++    if (isolated_mouse_hit_test_pending_) {
++      callback->sendFailure(Response::ServerError("An isolated mouse event is pending"));
++      return;
++    }
++    if (isolated_mouse_press_) {
++      gfx::PointF point;
++      if (!isolated_mouse_target_ ||
++          host_->GetDocumentToken() != isolated_mouse_document_ ||
++          !widget_host->GetView()->TransformPointToCoordSpaceForView(
++              event->PositionInWidget(), isolated_mouse_target_.get(), &point)) {
++        CancelIsolatedMouseSequence();
++        callback->sendFailure(Response::ServerError("Isolated mouse target was lost"));
++        return;
++      }
++      OnWidgetForDispatchMouseEvent(std::move(callback), std::move(event),
++                                    isolated_mouse_target_, point);
++      return;
++    }
++
++    if (!PointIsWithinContents(event->PositionInWidget())) {
++      callback->sendFailure(Response::InvalidParams("Mouse position is outside the session view"));
++      return;
++    }
++
++    isolated_mouse_hit_test_pending_ = true;
++    const gfx::PointF position = event->PositionInWidget();
++    widget_host->delegate()->GetRenderWidgetHostAtPointAsynchronously(
++        widget_host->GetView(), position,
++        base::BindOnce(
++            [](base::WeakPtr<InputHandler> self,
++               base::WeakPtr<RenderFrameHostImpl> session_frame,
++               blink::DocumentToken document,
++               std::unique_ptr<blink::WebMouseEvent> event,
++               std::unique_ptr<DispatchMouseEventCallback> callback,
++               base::WeakPtr<RenderWidgetHostViewBase> target,
++               std::optional<gfx::PointF> point) {
++              if (!self)
++                return;
++              self->isolated_mouse_hit_test_pending_ = false;
++              if (!session_frame || self->host_ != session_frame.get() ||
++                  !session_frame->IsActive() ||
++                  session_frame->GetDocumentToken() != document) {
++                callback->sendFailure(Response::ServerError("Mouse session target changed"));
++                return;
++              }
++              self->OnWidgetForDispatchMouseEvent(
++                  std::move(callback), std::move(event), target, point);
++            },
++            weak_factory_.GetWeakPtr(), host_->GetWeakPtr(),
++            host_->GetDocumentToken(), std::move(event), std::move(callback)));
++    return;
++  }
++
++  if (isolated_mouse_press_)
++    CancelIsolatedMouseSequence();
++
+   auto findWidgetAndDispatchEvent = base::BindOnce(
+       [](base::WeakPtr<InputHandler> self,
+          base::WeakPtr<RenderWidgetHostImpl> widget_host,
+@@ -1628,16 +1796,46 @@ void InputHandler::OnWidgetForDispatchMouseEvent(
+     std::unique_ptr<blink::WebMouseEvent> event,
+     base::WeakPtr<RenderWidgetHostViewBase> target,
+     std::optional<gfx::PointF> point) {
++  const bool isolate_focus =
++      event->GetModifiers() & blink::WebInputEvent::kDebuggerFocusIsolation;
+   if (!target || !point.has_value()) {
++    if (isolate_focus)
++      CancelIsolatedMouseSequence();
+     callback->sendFailure(Response::InternalError());
+     return;
+   }
++  auto* target_widget =
++      RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
++  if (!target_widget ||
++      (isolate_focus &&
++       (!host_ || target_widget->frame_tree() != host_->frame_tree()))) {
++    if (isolate_focus)
++      CancelIsolatedMouseSequence();
++    callback->sendFailure(
++        Response::ServerError("Input target is outside the session frame tree"));
++    return;
++  }
+   event->SetPositionInWidget(*point);
+   event->SetPositionInScreen(
+       ConvertWidgetPointToScreenPoint(CHECK_DEREF(target.get()), *point));
+
+-  RenderWidgetHostImpl* widget_host =
+-      RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
++  if (isolate_focus) {
++    const auto type = event->GetType();
++    if (type == blink::WebInputEvent::Type::kMouseDown) {
++      if (isolated_mouse_press_) {
++        callback->sendFailure(Response::ServerError("An isolated mouse button is already down"));
++        return;
++      }
++      isolated_mouse_target_ = target;
++      isolated_mouse_document_ = host_->GetDocumentToken();
++      isolated_mouse_press_ = std::make_unique<blink::WebMouseEvent>(*event);
++    } else if (type == blink::WebInputEvent::Type::kMouseUp) {
++      isolated_mouse_press_.reset();
++      isolated_mouse_target_.reset();
++    }
++  }
++
++  RenderWidgetHostImpl* widget_host = target_widget;
+   if (event->GetType() == blink::WebInputEvent::Type::kMouseWheel) {
+     EnsureInjector(widget_host)
+         ->InjectWheelEvent(static_cast<blink::WebMouseWheelEvent*>(event.get()),
+@@ -2289,7 +2487,28 @@ void InputHandler::SynthesizeTapGesture(
+   }
+ }
+
++void InputHandler::CancelIsolatedMouseSequence() {
++  auto press = std::move(isolated_mouse_press_);
++  auto view = isolated_mouse_target_;
++  isolated_mouse_target_.reset();
++  if (!press || !view || !host_ ||
++      host_->GetDocumentToken() != isolated_mouse_document_)
++    return;
++
++  auto* widget = RenderWidgetHostImpl::From(view->GetRenderWidgetHost());
++  if (!widget || widget->frame_tree() != host_->frame_tree())
++    return;
++
++  press->SetType(blink::WebInputEvent::Type::kMouseUp);
++  press->SetModifiers(press->GetModifiers() &
++                      ~blink::WebInputEvent::kLeftButtonDown);
++  press->click_count = 0;
++  press->SetPositionInWidget(gfx::PointF(-1, -1));
++  widget->ForwardMouseEvent(*press);
++}
++
+ void InputHandler::ClearInputState() {
++  CancelIsolatedMouseSequence();
+   while (!injectors_.empty())
+     (*injectors_.begin())->Cleanup();
+   // TODO(dgozman): cleanup touch callbacks as well?
+diff --git a/content/browser/devtools/protocol/input_handler.h b/content/browser/devtools/protocol/input_handler.h
+index 4c25a8c1c2..14d4ede1d6 100644
+--- a/content/browser/devtools/protocol/input_handler.h
++++ b/content/browser/devtools/protocol/input_handler.h
+@@ -20,6 +20,7 @@
+ #include "content/browser/devtools/protocol/input.h"
+ #include "content/browser/renderer_host/render_widget_host_view_base.h"
+ #include "content/common/input/synthetic_gesture.h"
++#include "third_party/blink/public/common/tokens/tokens.h"
+ #include "content/common/input/synthetic_pointer_action_list_params.h"
+ #include "content/common/input/synthetic_smooth_scroll_gesture_params.h"
+ #include "content/public/browser/render_widget_host.h"
+@@ -340,6 +341,15 @@ class InputHandler : public DevToolsDomainHandler, public Input::Backend {
+   void HandleMouseEvent(std::unique_ptr<blink::WebMouseEvent> event,
+                         std::unique_ptr<DispatchMouseEventCallback> callback);
+
++  void CancelIsolatedMouseSequence();
++  base::WeakPtr<RenderWidgetHostViewBase> isolated_mouse_target_;
++  std::unique_ptr<blink::WebMouseEvent> isolated_mouse_press_;
++  blink::DocumentToken isolated_mouse_document_;
++  bool isolated_mouse_hit_test_pending_ = false;
++
++  bool ShouldIsolateDebuggerInput();
++  RenderWidgetHostImpl* ResolveKeyboardWidget(
++      bool isolate_focus, bool include_child_frame_focus);
+   void ClearInputState();
+   bool PointIsWithinContents(gfx::PointF point) const;
+   InputInjector* EnsureInjector(RenderWidgetHostImpl* widget_host);
+diff --git a/content/browser/renderer_host/input/touch_emulator_impl.cc b/content/browser/renderer_host/input/touch_emulator_impl.cc
+index 71f8d44817..680e61681c 100644
+--- a/content/browser/renderer_host/input/touch_emulator_impl.cc
++++ b/content/browser/renderer_host/input/touch_emulator_impl.cc
+@@ -194,6 +194,10 @@ ui::Cursor TouchEmulatorImpl::InitCursorFromResource(int resource_id) {
+                                cursor_scale_factor_);
+ }
+
++bool TouchEmulatorImpl::IsEmulatingTouchFromMouse() const {
++  return IsEnabled() && mode_ == Mode::kEmulatingTouchFromMouse;
++}
++
+ bool TouchEmulatorImpl::HandleMouseEvent(
+     const WebMouseEvent& mouse_event,
+     input::RenderWidgetHostViewInput* target_view) {
+diff --git a/content/browser/renderer_host/input/touch_emulator_impl.h b/content/browser/renderer_host/input/touch_emulator_impl.h
+index a295b34992..b86af5b51e 100644
+--- a/content/browser/renderer_host/input/touch_emulator_impl.h
++++ b/content/browser/renderer_host/input/touch_emulator_impl.h
+@@ -45,6 +45,7 @@ class CONTENT_EXPORT TouchEmulatorImpl : public input::TouchEmulator {
+   void SetDeviceScaleFactor(float device_scale_factor) override;
+   void SetDoubleTapSupportForPageEnabled(bool enabled) override;
+   bool IsEnabled() const override;
++  bool IsEmulatingTouchFromMouse() const;
+   bool HandleTouchEvent(const blink::WebTouchEvent& event) override;
+   void OnGestureEventAck(
+       const blink::WebGestureEvent& event,
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index 993181a676..30ee08e5e4 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -1610,8 +1610,8 @@ void RenderWidgetHostImpl::ForwardMouseEventWithLatencyInfo(
+   }
+
+   auto* touch_emulator = GetTouchEmulator(/*create_if_necessary=*/false);
+-  if (touch_emulator &&
+-      touch_emulator->HandleMouseEvent(mouse_event, GetView())) {
++  if (!(mouse_event.GetModifiers() & WebInputEvent::kDebuggerFocusIsolation) &&
++      touch_emulator && touch_emulator->HandleMouseEvent(mouse_event, GetView())) {
+     return;
+   }
+
+@@ -1739,7 +1739,9 @@ void RenderWidgetHostImpl::ForwardKeyboardEventWithCommands(
+     return;
+   }
+
+-  if (suppress_events_until_keydown_) {
++  const bool from_debugger =
++      key_event.GetModifiers() & WebInputEvent::kDebuggerFocusIsolation;
++  if (!from_debugger && suppress_events_until_keydown_) {
+     // If the preceding RawKeyDown event was handled by the browser, then we
+     // need to suppress all events generated by it until the next RawKeyDown or
+     // KeyDown event.
+@@ -1796,7 +1798,8 @@ void RenderWidgetHostImpl::ForwardKeyboardEventWithCommands(
+   }
+
+   auto* touch_emulator = GetTouchEmulator(/*create_if_necessary=*/false);
+-  if (touch_emulator && touch_emulator->HandleKeyboardEvent(key_event)) {
++  if (!from_debugger && touch_emulator &&
++      touch_emulator->HandleKeyboardEvent(key_event)) {
+     return;
+   }
+   input::NativeWebKeyboardEventWithLatencyInfo key_event_with_latency(key_event,
+@@ -2368,7 +2371,7 @@ void RenderWidgetHostImpl::ImeSetComposition(
+   // Passing null callback since it is only needed for Devtools
+   GetWidgetInputHandler()->ImeSetComposition(
+       text, ime_text_spans, replacement_range, selection_start, selection_end,
+-      ime_state, base::OnceClosure());
++      ime_state, /*allow_unfocused=*/false, base::OnceClosure());
+ #if BUILDFLAG(IS_ANDROID)
+   for (auto& observer : ime_input_event_observers_) {
+     observer.OnImeSetComposingTextEvent(text);
+@@ -2382,9 +2385,9 @@ void RenderWidgetHostImpl::ImeCommitText(
+     const gfx::Range& replacement_range,
+     int relative_cursor_pos) {
+   // Passing null callback since it is only needed for Devtools
+-  GetWidgetInputHandler()->ImeCommitText(text, ime_text_spans,
+-                                         replacement_range, relative_cursor_pos,
+-                                         base::OnceClosure());
++  GetWidgetInputHandler()->ImeCommitText(
++      text, ime_text_spans, replacement_range, relative_cursor_pos,
++      /*allow_unfocused=*/false, base::OnceClosure());
+ #if BUILDFLAG(IS_ANDROID)
+   for (auto& observer : ime_input_event_observers_) {
+     observer.OnImeTextCommittedEvent(text);
+@@ -2406,7 +2409,7 @@ void RenderWidgetHostImpl::ImeCancelComposition() {
+   GetWidgetInputHandler()->ImeSetComposition(
+       std::u16string(), std::vector<ui::ImeTextSpan>(),
+       gfx::Range::InvalidRange(), 0, 0, blink::mojom::ImeState::kNone,
+-      base::OnceClosure());
++      /*allow_unfocused=*/false, base::OnceClosure());
+ }
+
+ void RenderWidgetHostImpl::RejectPointerLockOrUnlockIfNecessary(
+@@ -2443,7 +2446,8 @@ void RenderWidgetHostImpl::OnMouseEventAck(
+   // by the renderer. eg. Back/Forward mouse buttons.
+   if (delegate_ &&
+       ack_result != blink::mojom::InputEventResultState::kConsumed &&
+-      !IsHidden()) {
++      !IsHidden() &&
++      !(mouse_event.event.GetModifiers() & WebInputEvent::kDebuggerFocusIsolation)) {
+     delegate_->HandleMouseEvent(mouse_event.event);
+   }
+ }
+@@ -2791,9 +2795,10 @@ void RenderWidgetHostImpl::OnInputEventPreDispatch(
+     return;
+   }
+
+-  if (event.GetType() == WebInputEvent::Type::kMouseDown ||
+-      event.GetType() == WebInputEvent::Type::kTouchStart ||
+-      event.GetType() == WebInputEvent::Type::kGestureTap) {
++  if (!(event.GetModifiers() & WebInputEvent::kDebuggerFocusIsolation) &&
++      (event.GetType() == WebInputEvent::Type::kMouseDown ||
++       event.GetType() == WebInputEvent::Type::kTouchStart ||
++       event.GetType() == WebInputEvent::Type::kGestureTap)) {
+     delegate_->FocusOwningWebContents(this);
+   }
+ }
+diff --git a/content/renderer/render_view_browsertest.cc b/content/renderer/render_view_browsertest.cc
+index 33c4785d91..eff3c123e9 100644
+--- a/content/renderer/render_view_browsertest.cc
++++ b/content/renderer/render_view_browsertest.cc
+@@ -1911,14 +1911,15 @@ TEST_F(RenderViewImplTest, ImeComposition) {
+             base::WideToUTF16(ime_message.ime_string),
+             std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(),
+             ime_message.selection_start, ime_message.selection_end,
+-            blink::mojom::ImeState::kNone, base::DoNothing());
++            blink::mojom::ImeState::kNone, /*allow_unfocused=*/false,
++            base::DoNothing());
+         break;
+
+       case IME_COMMITTEXT:
+         GetWidgetInputHandler()->ImeCommitText(
+             base::WideToUTF16(ime_message.ime_string),
+             std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0,
+-            base::DoNothing());
++            /*allow_unfocused=*/false, base::DoNothing());
+         break;
+
+       case IME_FINISHCOMPOSINGTEXT:
+@@ -1929,7 +1930,7 @@ TEST_F(RenderViewImplTest, ImeComposition) {
+         GetWidgetInputHandler()->ImeSetComposition(
+             std::u16string(), std::vector<ui::ImeTextSpan>(),
+             gfx::Range::InvalidRange(), 0, 0, blink::mojom::ImeState::kNone,
+-            base::DoNothing());
++            /*allow_unfocused=*/false, base::DoNothing());
+         break;
+     }
+
+@@ -2190,7 +2191,8 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
+   const std::u16string ascii_composition = u"aiueo";
+   widget_input_handler->ImeSetComposition(
+       ascii_composition, empty_ime_text_span, gfx::Range::InvalidRange(), 0, 0,
+-      blink::mojom::ImeState::kNone, base::DoNothing());
++      blink::mojom::ImeState::kNone, /*allow_unfocused=*/false,
++      base::DoNothing());
+   bounds = LastCompositionBounds();
+   ASSERT_EQ(ascii_composition.size(), bounds.size());
+
+@@ -2198,33 +2200,35 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
+     EXPECT_LT(0, r.width());
+   widget_input_handler->ImeCommitText(
+       empty_string, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(),
+-      0, base::DoNothing());
++      0, /*allow_unfocused=*/false, base::DoNothing());
+
+   // Non surrogate pair unicode character.
+   const std::u16string unicode_composition = u"あいうえお";
+   widget_input_handler->ImeSetComposition(
+       unicode_composition, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
+-      0, blink::mojom::ImeState::kNone, base::DoNothing());
++      0, blink::mojom::ImeState::kNone, /*allow_unfocused=*/false,
++      base::DoNothing());
+   bounds = LastCompositionBounds();
+   ASSERT_EQ(unicode_composition.size(), bounds.size());
+   for (const gfx::Rect& r : bounds)
+     EXPECT_LT(0, r.width());
+-  widget_input_handler->ImeCommitText(empty_string, empty_ime_text_span,
+-                                      gfx::Range::InvalidRange(), 0,
+-                                      base::DoNothing());
++  widget_input_handler->ImeCommitText(
++      empty_string, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
++      /*allow_unfocused=*/false, base::DoNothing());
+
+   // Surrogate pair character.
+   const std::u16string surrogate_pair_char = u"𠮟";
+   widget_input_handler->ImeSetComposition(
+       surrogate_pair_char, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
+-      0, blink::mojom::ImeState::kNone, base::DoNothing());
++      0, blink::mojom::ImeState::kNone, /*allow_unfocused=*/false,
++      base::DoNothing());
+   bounds = LastCompositionBounds();
+   ASSERT_EQ(surrogate_pair_char.size(), bounds.size());
+   EXPECT_LT(0, bounds[0].width());
+   EXPECT_EQ(0, bounds[1].width());
+-  widget_input_handler->ImeCommitText(empty_string, empty_ime_text_span,
+-                                      gfx::Range::InvalidRange(), 0,
+-                                      base::DoNothing());
++  widget_input_handler->ImeCommitText(
++      empty_string, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
++      /*allow_unfocused=*/false, base::DoNothing());
+
+   // Mixed string.
+   const std::u16string surrogate_pair_mixed_composition =
+@@ -2237,7 +2241,7 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
+   widget_input_handler->ImeSetComposition(
+       surrogate_pair_mixed_composition, empty_ime_text_span,
+       gfx::Range::InvalidRange(), 0, 0, blink::mojom::ImeState::kNone,
+-      base::DoNothing());
++      /*allow_unfocused=*/false, base::DoNothing());
+   bounds = LastCompositionBounds();
+   ASSERT_EQ(utf16_length, bounds.size());
+   for (size_t i = 0; i < utf16_length; ++i) {
+@@ -2247,9 +2251,9 @@ TEST_F(RenderViewImplTest, GetCompositionCharacterBoundsTest) {
+       EXPECT_LT(0, bounds[i].width());
+     }
+   }
+-  widget_input_handler->ImeCommitText(empty_string, empty_ime_text_span,
+-                                      gfx::Range::InvalidRange(), 0,
+-                                      base::DoNothing());
++  widget_input_handler->ImeCommitText(
++      empty_string, empty_ime_text_span, gfx::Range::InvalidRange(), 0,
++      /*allow_unfocused=*/false, base::DoNothing());
+ }
+ #endif
+
+@@ -3153,7 +3157,8 @@ TEST_F(RenderViewImplScaleFactorTest,
+   const std::u16string ascii_composition = u"aiueo";
+   widget_input_handler->ImeSetComposition(
+       ascii_composition, empty_ime_text_span, gfx::Range::InvalidRange(), 0, 0,
+-      blink::mojom::ImeState::kNone, base::DoNothing());
++      blink::mojom::ImeState::kNone, /*allow_unfocused=*/false,
++      base::DoNothing());
+   bounds_at_1x = LastCompositionBounds();
+   ASSERT_EQ(ascii_composition.size(), bounds_at_1x.size());
+
+diff --git a/content/renderer/render_widget_browsertest.cc b/content/renderer/render_widget_browsertest.cc
+index 991ed38752..09bd51a316 100644
+--- a/content/renderer/render_widget_browsertest.cc
++++ b/content/renderer/render_widget_browsertest.cc
+@@ -36,10 +36,10 @@ class RenderWidgetTest : public RenderViewTest {
+     return GetWebFrameWidget()->GetActiveWebInputMethodController();
+   }
+
+-  void CommitText(std::string text) {
++  void CommitText(std::string text, bool allow_unfocused = false) {
+     render_widget_host_->GetWidgetInputHandler()->ImeCommitText(
+         base::UTF8ToUTF16(text), std::vector<ui::ImeTextSpan>(),
+-        gfx::Range::InvalidRange(), 0, base::DoNothing());
++        gfx::Range::InvalidRange(), 0, allow_unfocused, base::DoNothing());
+     base::RunLoop().RunUntilIdle();
+   }
+
+@@ -268,10 +268,18 @@ TEST_F(RenderWidgetTest, PageFocusIme) {
+   // This time is should not work since |m_imeAcceptEvents| is not set.
+   EXPECT_EQ("hello", GetInputMethodController()->TextInputInfo().value.Utf8());
+
++  // Directed input can commit without turning on widget focus. Native IME
++  // remains rejected afterwards, so this permission does not change state.
++  CommitText("!", true);
++  EXPECT_EQ("hello!", GetInputMethodController()->TextInputInfo().value.Utf8());
++  EXPECT_FALSE(GetWebFrameWidget()->HasFocus());
++  CommitText("ignored");
++  EXPECT_EQ("hello!", GetInputMethodController()->TextInputInfo().value.Utf8());
++
+   // Now give focus back again and commit text.
+   SetFocus(true);
+   CommitText(text);
+-  EXPECT_EQ("hello world",
++  EXPECT_EQ("hello! world",
+             GetInputMethodController()->TextInputInfo().value.Utf8());
+ }
+
+diff --git a/content/test/mock_widget_input_handler.cc b/content/test/mock_widget_input_handler.cc
+index 1245c4faad..40c3a4d18d 100644
+--- a/content/test/mock_widget_input_handler.cc
++++ b/content/test/mock_widget_input_handler.cc
+@@ -64,6 +64,7 @@ void MockWidgetInputHandler::ImeSetComposition(
+     int32_t start,
+     int32_t end,
+     blink::mojom::ImeState ime_state,
++    bool allow_unfocused,
+     ImeSetCompositionCallback callback) {
+   dispatched_messages_.emplace_back(std::make_unique<DispatchedIMEMessage>(
+       "SetComposition", text, ime_text_spans, range, start, end, ime_state));
+@@ -76,6 +77,7 @@ void MockWidgetInputHandler::ImeCommitText(
+     const std::vector<ui::ImeTextSpan>& ime_text_spans,
+     const gfx::Range& range,
+     int32_t relative_cursor_position,
++    bool allow_unfocused,
+     ImeCommitTextCallback callback) {
+   dispatched_messages_.emplace_back(std::make_unique<DispatchedIMEMessage>(
+       "CommitText", text, ime_text_spans, range, relative_cursor_position,
+diff --git a/content/test/mock_widget_input_handler.h b/content/test/mock_widget_input_handler.h
+index 44f7516066..31b5d6dc5b 100644
+--- a/content/test/mock_widget_input_handler.h
++++ b/content/test/mock_widget_input_handler.h
+@@ -253,11 +253,13 @@ class MockWidgetInputHandler : public blink::mojom::WidgetInputHandler {
+                          int32_t start,
+                          int32_t end,
+                          blink::mojom::ImeState ime_state,
++                         bool allow_unfocused,
+                          ImeSetCompositionCallback callback) override;
+   void ImeCommitText(const std::u16string& text,
+                      const std::vector<ui::ImeTextSpan>& ime_text_spans,
+                      const gfx::Range& range,
+                      int32_t relative_cursor_position,
++                     bool allow_unfocused,
+                      ImeCommitTextCallback callback) override;
+   void ImeFinishComposingText(bool keep_selection) override;
+   void RequestTextInputStateUpdate() override;
+diff --git a/third_party/blink/public/common/input/web_input_event.h b/third_party/blink/public/common/input/web_input_event.h
+index 2cec6e3a7c..8c2a22428e 100644
+--- a/third_party/blink/public/common/input/web_input_event.h
++++ b/third_party/blink/public/common/input/web_input_event.h
+@@ -137,6 +137,9 @@ class BLINK_COMMON_EXPORT WebInputEvent {
+     // in event sending.
+     kFromDebugger = 1 << 23,
+
++    // This debugger event must not acquire or borrow native focus.
++    kDebuggerFocusIsolation = 1 << 27,
++
+     // Indicates this event is targeting an OOPIF, and the iframe or one of its
+     // ancestor frames moved within its embedding page's viewport recently.
+     kTargetFrameMovedRecently = 1 << 24,
+diff --git a/third_party/blink/public/mojom/input/input_handler.mojom b/third_party/blink/public/mojom/input/input_handler.mojom
+index ea2fa2e3e1..a19cbb7580 100644
+--- a/third_party/blink/public/mojom/input/input_handler.mojom
++++ b/third_party/blink/public/mojom/input/input_handler.mojom
+@@ -496,13 +496,16 @@ interface WidgetInputHandler {
+   CursorVisibilityChanged(bool visible);
+
+   // This message sends a string being composed with an input method.
++  // Directed automation can opt out of the widget-focus check without changing
++  // focus state. Ordinary IME input leaves allow_unfocused false.
+   // Note, the response is specifically for Devtools to learn about completion
+   ImeSetComposition(mojo_base.mojom.String16 text,
+                     array<ui.mojom.ImeTextSpan> ime_text_spans,
+                     gfx.mojom.Range range,
+                     int32 start,
+                     int32 end,
+-                    ImeState ime_state) => ();
++                    ImeState ime_state,
++                    [MinVersion=1] bool allow_unfocused) => ();
+
+   // This message deletes the current composition, inserts specified text, and
+   // moves the cursor.
+@@ -510,7 +513,8 @@ interface WidgetInputHandler {
+   ImeCommitText(mojo_base.mojom.String16 text,
+                 array<ui.mojom.ImeTextSpan> ime_text_spans,
+                 gfx.mojom.Range range,
+-                int32 relative_cursor_position) => ();
++                int32 relative_cursor_position,
++                [MinVersion=1] bool allow_unfocused) => ();
+
+   // This message inserts the ongoing composition.
+   ImeFinishComposingText(bool keep_selection);
+diff --git a/third_party/blink/renderer/core/input/keyboard_event_manager.cc b/third_party/blink/renderer/core/input/keyboard_event_manager.cc
+index 9fc3528f47..f71c85f3f5 100644
+--- a/third_party/blink/renderer/core/input/keyboard_event_manager.cc
++++ b/third_party/blink/renderer/core/input/keyboard_event_manager.cc
+@@ -590,11 +590,17 @@ bool KeyboardEventManager::DefaultTabEventHandler(KeyboardEvent* event) {
+     return false;
+   }
+
+-  if (page->GetFocusController().AdvanceFocus(focus_type,
+-                                              frame_->GetDocument()
+-                                                  ->domWindow()
+-                                                  ->GetInputDeviceCapabilities()
+-                                                  ->FiresTouchEvents(false))) {
++  const auto* key = event->KeyEvent();
++  const bool isolate_focus =
++      key && (key->GetModifiers() & WebInputEvent::kDebuggerFocusIsolation);
++  auto* capabilities = frame_->GetDocument()->domWindow()
++                           ->GetInputDeviceCapabilities()->FiresTouchEvents(false);
++  auto& focus_controller = page->GetFocusController();
++  const bool advanced =
++      isolate_focus
++          ? focus_controller.AdvanceFocusWithinLocalFrames(focus_type, capabilities)
++          : focus_controller.AdvanceFocus(focus_type, capabilities);
++  if (advanced) {
+     event->SetDefaultHandled();
+     return true;
+   }
+diff --git a/third_party/blink/renderer/core/input/mouse_event_manager.cc b/third_party/blink/renderer/core/input/mouse_event_manager.cc
+index e30f36f475..9c75b0dc5b 100644
+--- a/third_party/blink/renderer/core/input/mouse_event_manager.cc
++++ b/third_party/blink/renderer/core/input/mouse_event_manager.cc
+@@ -690,8 +690,9 @@ WebInputEventResult MouseEventManager::HandleMousePressEvent(
+
+   bool single_click = event.Event().click_count <= 1;
+
+-  mouse_down_may_start_drag_ = single_click && !IsSelectionOverLink(event) &&
+-                               !IsExtendingSelection(event);
++  mouse_down_may_start_drag_ =
++      !(event.Event().GetModifiers() & WebInputEvent::kDebuggerFocusIsolation) &&
++      single_click && !IsSelectionOverLink(event) && !IsExtendingSelection(event);
+
+   mouse_down_ = event.Event();
+
+@@ -850,6 +851,7 @@ WebInputEventResult MouseEventManager::HandleMouseDraggedEvent(
+ #endif
+
+   if (should_handle_drag &&
++      !(event.Event().GetModifiers() & WebInputEvent::kDebuggerFocusIsolation) &&
+       HandleDrag(event, is_pen ? DragAndDropToolType::kStylusViaButton
+                                : DragAndDropToolType::kMouse) !=
+           DragHandlingResult::kNotHandled) {
+diff --git a/third_party/blink/renderer/core/page/focus_controller.cc b/third_party/blink/renderer/core/page/focus_controller.cc
+index 9eded8bc61..c784708674 100644
+--- a/third_party/blink/renderer/core/page/focus_controller.cc
++++ b/third_party/blink/renderer/core/page/focus_controller.cc
+@@ -2011,6 +2011,22 @@ bool FocusController::AdvanceFocus(
+     mojom::blink::FocusType type,
+     bool initial_focus,
+     InputDeviceCapabilities* source_capabilities) {
++  return AdvanceFocus(type, initial_focus, source_capabilities,
++                      /*allow_focus_transfer=*/true);
++}
++
++bool FocusController::AdvanceFocusWithinLocalFrames(
++    mojom::blink::FocusType type,
++    InputDeviceCapabilities* source_capabilities) {
++  return AdvanceFocus(type, /*initial_focus=*/false, source_capabilities,
++                      /*allow_focus_transfer=*/false);
++}
++
++bool FocusController::AdvanceFocus(
++    mojom::blink::FocusType type,
++    bool initial_focus,
++    InputDeviceCapabilities* source_capabilities,
++    bool allow_focus_transfer) {
+   switch (type) {
+     case mojom::blink::FocusType::kForward:
+     case mojom::blink::FocusType::kBackward: {
+@@ -2019,7 +2035,8 @@ bool FocusController::AdvanceFocus(
+       // frame's process from the beginning.
+       auto* starting_frame = To<LocalFrame>(FocusedOrMainFrame());
+       return AdvanceFocusInDocumentOrder(starting_frame, nullptr, type,
+-                                         initial_focus, source_capabilities);
++                                         initial_focus, source_capabilities,
++                                         allow_focus_transfer);
+     }
+     case mojom::blink::FocusType::kSpatialNavigation:
+       // Fallthrough - SpatialNavigation should use
+@@ -2064,7 +2081,8 @@ bool FocusController::AdvanceFocusInDocumentOrder(
+     Element* start,
+     mojom::blink::FocusType type,
+     bool initial_focus,
+-    InputDeviceCapabilities* source_capabilities) {
++    InputDeviceCapabilities* source_capabilities,
++    bool allow_focus_transfer) {
+   DCHECK(frame);
+   Document* document = frame->GetDocument();
+   OwnerMap owner_map;
+@@ -2106,6 +2124,8 @@ bool FocusController::AdvanceFocusInDocumentOrder(
+     // If there's a RemoteFrame on the ancestor chain, we need to continue
+     // searching for focusable elements there.
+     if (frame->LocalFrameRoot() != frame->Tree().Top()) {
++      if (!allow_focus_transfer)
++        return false;
+       document->ClearFocusedElement();
+       document->SetSequentialFocusNavigationStartingPoint(nullptr);
+       SetFocusedFrame(nullptr);
+@@ -2116,7 +2136,8 @@ bool FocusController::AdvanceFocusInDocumentOrder(
+
+     // We didn't find an element to focus, so we should try to pass focus to
+     // Chrome.
+-    if ((!initial_focus || document->GetFrame()->IsFencedFrameRoot()) &&
++    if (allow_focus_transfer &&
++        (!initial_focus || document->GetFrame()->IsFencedFrameRoot()) &&
+         page_->GetChromeClient().CanTakeFocus(type)) {
+       document->ClearFocusedElement();
+       document->SetSequentialFocusNavigationStartingPoint(nullptr);
+@@ -2159,7 +2180,7 @@ bool FocusController::AdvanceFocusInDocumentOrder(
+                 !element->IsKeyboardFocusableSlow())) {
+     // FIXME: We should not focus frames that have no scrollbars, as focusing
+     // them isn't useful to the user.
+-    if (!owner->ContentFrame()) {
++    if (!owner->ContentFrame() || (has_remote_frame && !allow_focus_transfer)) {
+       return false;
+     }
+
+diff --git a/third_party/blink/renderer/core/page/focus_controller.h b/third_party/blink/renderer/core/page/focus_controller.h
+index 6ac8990ce0..7ed7fc95cf 100644
+--- a/third_party/blink/renderer/core/page/focus_controller.h
++++ b/third_party/blink/renderer/core/page/focus_controller.h
+@@ -92,6 +92,9 @@ class CORE_EXPORT FocusController final
+                     InputDeviceCapabilities* source_capabilities = nullptr) {
+     return AdvanceFocus(type, false, source_capabilities);
+   }
++  bool AdvanceFocusWithinLocalFrames(
++      mojom::blink::FocusType type,
++      InputDeviceCapabilities* source_capabilities);
+   bool AdvanceFocusAcrossFrames(
+       mojom::blink::FocusType,
+       RemoteFrame* from,
+@@ -138,12 +141,17 @@ class CORE_EXPORT FocusController final
+   bool AdvanceFocus(mojom::blink::FocusType,
+                     bool initial_focus,
+                     InputDeviceCapabilities* source_capabilities = nullptr);
++  bool AdvanceFocus(mojom::blink::FocusType type,
++                    bool initial_focus,
++                    InputDeviceCapabilities* source_capabilities,
++                    bool allow_focus_transfer);
+   bool AdvanceFocusInDocumentOrder(
+       LocalFrame*,
+       Element* start,
+       mojom::blink::FocusType,
+       bool initial_focus,
+-      InputDeviceCapabilities* source_capabilities);
++      InputDeviceCapabilities* source_capabilities,
++      bool allow_focus_transfer = true);
+
+   void NotifyFocusChangedObservers() const;
+
+diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.cc b/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.cc
+index ff677dd4b9..d5cbca9362 100644
+--- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.cc
++++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.cc
+@@ -114,8 +114,10 @@ static void ImeSetCompositionOnMainThread(
+     int32_t start,
+     int32_t end,
+     mojom::blink::ImeState ime_state,
++    bool allow_unfocused,
+     WidgetInputHandlerImpl::ImeSetCompositionCallback callback) {
+-  widget->ImeSetComposition(text, ime_text_spans, range, start, end, ime_state);
++  widget->ImeSetComposition(text, ime_text_spans, range, start, end, ime_state,
++                            allow_unfocused);
+   callback_task_runner->PostTask(FROM_HERE, std::move(callback));
+ }
+
+@@ -126,12 +128,13 @@ void WidgetInputHandlerImpl::ImeSetComposition(
+     int32_t start,
+     int32_t end,
+     mojom::blink::ImeState ime_state,
++    bool allow_unfocused,
+     WidgetInputHandlerImpl::ImeSetCompositionCallback callback) {
+   // TODO(470910193): Avoid use of GetCurrentDefault() in Blink.
+   RunOnMainThread(base::BindOnce(
+       &ImeSetCompositionOnMainThread, widget_,
+       base::SingleThreadTaskRunner::GetCurrentDefault(), text, ime_text_spans,
+-      range, start, end, ime_state, std::move(callback)));
++      range, start, end, ime_state, allow_unfocused, std::move(callback)));
+ }
+
+ static void ImeCommitTextOnMainThread(
+@@ -141,8 +144,10 @@ static void ImeCommitTextOnMainThread(
+     const Vector<ui::ImeTextSpan>& ime_text_spans,
+     const gfx::Range& range,
+     int32_t relative_cursor_position,
++    bool allow_unfocused,
+     WidgetInputHandlerImpl::ImeCommitTextCallback callback) {
+-  widget->ImeCommitText(text, ime_text_spans, range, relative_cursor_position);
++  widget->ImeCommitText(text, ime_text_spans, range, relative_cursor_position,
++                        allow_unfocused);
+   callback_task_runner->PostTask(FROM_HERE, std::move(callback));
+ }
+
+@@ -151,12 +156,13 @@ void WidgetInputHandlerImpl::ImeCommitText(
+     const Vector<ui::ImeTextSpan>& ime_text_spans,
+     const gfx::Range& range,
+     int32_t relative_cursor_position,
++    bool allow_unfocused,
+     ImeCommitTextCallback callback) {
+   // TODO(470910193): Avoid use of GetCurrentDefault() in Blink.
+   RunOnMainThread(base::BindOnce(
+       &ImeCommitTextOnMainThread, widget_,
+       base::SingleThreadTaskRunner::GetCurrentDefault(), text, ime_text_spans,
+-      range, relative_cursor_position, std::move(callback)));
++      range, relative_cursor_position, allow_unfocused, std::move(callback)));
+ }
+
+ void WidgetInputHandlerImpl::ImeFinishComposingText(bool keep_selection) {
+diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.h b/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.h
+index 9d00610348..72ffc96fbb 100644
+--- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.h
++++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.h
+@@ -54,11 +54,13 @@ class WidgetInputHandlerImpl : public mojom::blink::WidgetInputHandler {
+                          int32_t start,
+                          int32_t end,
+                          mojom::blink::ImeState ime_state,
++                         bool allow_unfocused,
+                          ImeSetCompositionCallback callback) override;
+   void ImeCommitText(const String& text,
+                      const Vector<ui::ImeTextSpan>& ime_text_spans,
+                      const gfx::Range& range,
+                      int32_t relative_cursor_position,
++                     bool allow_unfocused,
+                      ImeCommitTextCallback callback) override;
+   void ImeFinishComposingText(bool keep_selection) override;
+   void RequestTextInputStateUpdate() override;
+diff --git a/third_party/blink/renderer/platform/widget/widget_base.cc b/third_party/blink/renderer/platform/widget/widget_base.cc
+index 39641f5926..4c9fb26e19 100644
+--- a/third_party/blink/renderer/platform/widget/widget_base.cc
++++ b/third_party/blink/renderer/platform/widget/widget_base.cc
+@@ -1584,9 +1584,12 @@ void WidgetBase::ImeSetComposition(
+     const gfx::Range& replacement_range,
+     int selection_start,
+     int selection_end,
+-    mojom::blink::ImeState ime_state) {
+-  if (!ShouldHandleImeEvents())
++    mojom::blink::ImeState ime_state,
++    bool allow_unfocused) {
++  if ((!allow_unfocused && !ShouldHandleImeEvents()) ||
++      (allow_unfocused && IsForProvisionalFrame())) {
+     return;
++  }
+
+   FrameWidget* frame_widget = client_->FrameWidget();
+   if (!frame_widget)
+@@ -1605,7 +1608,7 @@ void WidgetBase::ImeSetComposition(
+   if (!guard.IsValid()) {
+     return;
+   }
+-  if (!success) {
++  if (!success && !allow_unfocused) {
+     // If we failed to set the composition text, then we need to let the browser
+     // process to cancel the input method's ongoing composition session, to make
+     // sure we are in a consistent state.
+@@ -1620,9 +1623,12 @@ void WidgetBase::ImeSetComposition(
+ void WidgetBase::ImeCommitText(const String& text,
+                                const Vector<ui::ImeTextSpan>& ime_text_spans,
+                                const gfx::Range& replacement_range,
+-                               int relative_cursor_pos) {
+-  if (!ShouldHandleImeEvents())
++                               int relative_cursor_pos,
++                               bool allow_unfocused) {
++  if ((!allow_unfocused && !ShouldHandleImeEvents()) ||
++      (allow_unfocused && IsForProvisionalFrame())) {
+     return;
++  }
+
+   FrameWidget* frame_widget = client_->FrameWidget();
+   if (!frame_widget)
+diff --git a/third_party/blink/renderer/platform/widget/widget_base.h b/third_party/blink/renderer/platform/widget/widget_base.h
+index 5984b2a523..bcb29ebad0 100644
+--- a/third_party/blink/renderer/platform/widget/widget_base.h
++++ b/third_party/blink/renderer/platform/widget/widget_base.h
+@@ -288,11 +288,13 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
+                          const gfx::Range& replacement_range,
+                          int selection_start,
+                          int selection_end,
+-                         mojom::blink::ImeState ime_state);
++                         mojom::blink::ImeState ime_state,
++                         bool allow_unfocused = false);
+   void ImeCommitText(const String& text,
+                      const Vector<ui::ImeTextSpan>& ime_text_spans,
+                      const gfx::Range& replacement_range,
+-                     int relative_cursor_pos);
++                     int relative_cursor_pos,
++                     bool allow_unfocused = false);
+   void ImeFinishComposingText(bool keep_selection);
+   bool IsForProvisionalFrame();
+   void FlushInputProcessedCallback();

@@ -14,6 +14,18 @@ export function setupWebView2(hooks: WebView2Hooks) {
       receipt?: internal.Receipt;
       unsubscribe?: () => void;
       readonly root: ShadowRoot;
+      hasFocus = false;
+      focusWindow: Window | null = null;
+      updateFocus = (event?: Event) => {
+        if (event && !event.isTrusted) return;
+        const focused = !!this.receipt && this.element.ownerDocument.activeElement === this.element;
+        if (focused === this.hasFocus) return;
+        this.hasFocus = focused;
+        const type = focused ? 'focus' : 'blur';
+        if (event?.target !== this.element || event?.type !== type) {
+          this.element.dispatchEvent(new Event(type));
+        }
+      };
       constructor(readonly element: HTMLElement) {
         this.root = element.attachShadow({ mode: 'closed' });
         const style = document.createElement('style');
@@ -31,6 +43,7 @@ export function setupWebView2(hooks: WebView2Hooks) {
         this.unsubscribe = undefined;
         if (receipt) hooks.webview2Internal.release(receipt);
         this.root.querySelector('iframe')?.remove();
+        this.updateFocus();
         if (receipt) this.emit('detached', receipt);
       }
       start() {
@@ -72,16 +85,29 @@ export function setupWebView2(hooks: WebView2Hooks) {
         super();
         states.set(this, new State(this));
       }
+      focus() {
+        const state = states.get(this)!;
+        if (!state.receipt) return;
+        state.root.querySelector('iframe')?.contentWindow?.focus();
+        state.updateFocus();
+      }
       // Upgrades run attributeChangedCallback before connectedCallback; only
       // the latter may start, so each connection makes one attempt.
       connectedCallback() {
         const state = states.get(this)!;
         state.connected = true;
+        const window = (state.focusWindow = this.ownerDocument.defaultView);
+        window?.addEventListener('focus', state.updateFocus, true);
+        window?.addEventListener('blur', state.updateFocus, true);
         state.start();
       }
       disconnectedCallback() {
         const state = states.get(this)!;
         state.connected = false;
+        const window = state.focusWindow;
+        window?.removeEventListener('focus', state.updateFocus, true);
+        window?.removeEventListener('blur', state.updateFocus, true);
+        state.focusWindow = null;
         state.stop();
       }
       attributeChangedCallback(_name: string, oldValue: string | null, value: string | null) {
